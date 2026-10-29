@@ -22,10 +22,16 @@ import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.rocksdb.BlockBasedTableConfig;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionOptionsUniversal;
 import org.rocksdb.CompressionType;
+import org.rocksdb.HyperClockCache;
+import org.rocksdb.IndexType;
+import org.rocksdb.LRUCache;
 import org.rocksdb.RocksDB;
+import org.rocksdb.util.SizeUnit;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -35,6 +41,42 @@ public class RocksDBOptionsFactoryTest {
     @BeforeClass
     public static void loadRocksDB() {
         RocksDB.loadLibrary();
+    }
+
+    @Test
+    public void testRocksDBVersion11() {
+        RocksDB.Version version = RocksDB.rocksdbVersion();
+        Assert.assertNotNull(version);
+        Assert.assertEquals(11, version.getMajor());
+        Assert.assertEquals(8, version.getMinor());
+    }
+
+    @Test
+    public void testCreateBlockCacheHyperClockAndLRU() {
+        try (Cache hyperClock = RocksDBOptionsFactory.createBlockCache(64 * SizeUnit.MB, true);
+             Cache lru = RocksDBOptionsFactory.createBlockCache(64 * SizeUnit.MB, false)) {
+            Assert.assertTrue(hyperClock instanceof HyperClockCache);
+            Assert.assertTrue(lru instanceof LRUCache);
+        }
+    }
+
+    @Test
+    public void testPartitionedIndexFiltersAndFormatVersion() {
+        MessageStoreConfig config = new MessageStoreConfig();
+        config.setEnableRocksdbHyperClockCache(true);
+        config.setEnableRocksdbPartitionedIndexFilters(true);
+        config.setRocksdbFormatVersion(6);
+        MessageStore messageStore = mock(MessageStore.class);
+        when(messageStore.getMessageStoreConfig()).thenReturn(config);
+
+        try (ColumnFamilyOptions options = RocksDBOptionsFactory.createCQCFOptions(messageStore)) {
+            Assert.assertTrue(options.tableFormatConfig() instanceof BlockBasedTableConfig);
+            BlockBasedTableConfig tableConfig = (BlockBasedTableConfig) options.tableFormatConfig();
+            Assert.assertEquals(6, tableConfig.formatVersion());
+            Assert.assertEquals(IndexType.kTwoLevelIndexSearch, tableConfig.indexType());
+            Assert.assertTrue(tableConfig.partitionFilters());
+            Assert.assertTrue(tableConfig.optimizeFiltersForMemory());
+        }
     }
 
     @Test

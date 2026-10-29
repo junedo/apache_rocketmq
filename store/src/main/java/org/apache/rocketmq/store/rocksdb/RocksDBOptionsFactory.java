@@ -21,6 +21,7 @@ import org.apache.rocketmq.store.MessageStore;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionOptionsUniversal;
 import org.rocksdb.CompactionPriority;
@@ -29,6 +30,7 @@ import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.DataBlockIndexType;
+import org.rocksdb.HyperClockCache;
 import org.rocksdb.IndexType;
 import org.rocksdb.InfoLogLevel;
 import org.rocksdb.LRUCache;
@@ -42,10 +44,36 @@ import org.rocksdb.util.SizeUnit;
 
 public class RocksDBOptionsFactory {
 
+    public static Cache createBlockCache(long capacity, boolean useHyperClockCache) {
+        if (useHyperClockCache) {
+            return new HyperClockCache(capacity, 0L, 8, false);
+        }
+        return new LRUCache(capacity, 8, false);
+    }
+
+    private static void applyTableFormatConfig(BlockBasedTableConfig blockBasedTableConfig,
+        int formatVersion, boolean enablePartitionedIndexFilters) {
+        blockBasedTableConfig
+            .setFormatVersion(formatVersion)
+            .setOptimizeFiltersForMemory(true);
+        if (enablePartitionedIndexFilters) {
+            blockBasedTableConfig
+                .setIndexType(IndexType.kTwoLevelIndexSearch)
+                .setPartitionFilters(true)
+                .setMetadataBlockSize(4 * SizeUnit.KB)
+                .setCacheIndexAndFilterBlocks(true);
+        } else {
+            blockBasedTableConfig
+                .setIndexType(IndexType.kBinarySearch)
+                .setPartitionFilters(false);
+        }
+    }
+
     public static ColumnFamilyOptions createCQCFOptions(final MessageStore messageStore) {
+        MessageStoreConfig messageStoreConfig = messageStore != null && messageStore.getMessageStoreConfig() != null
+            ? messageStore.getMessageStoreConfig()
+            : new MessageStoreConfig();
         BlockBasedTableConfig blockBasedTableConfig = new BlockBasedTableConfig().
-                setFormatVersion(5).
-                setIndexType(IndexType.kBinarySearch).
                 setDataBlockIndexType(DataBlockIndexType.kDataBlockBinaryAndHash).
                 setDataBlockHashTableUtilRatio(0.75).
                 setBlockSize(32 * SizeUnit.KB).
@@ -55,10 +83,12 @@ public class RocksDBOptionsFactory {
                 setCacheIndexAndFilterBlocksWithHighPriority(true).
                 setPinL0FilterAndIndexBlocksInCache(false).
                 setPinTopLevelIndexAndFilter(true).
-                setBlockCache(new LRUCache(1024 * SizeUnit.MB, 8, false)).
+                setBlockCache(createBlockCache(1024 * SizeUnit.MB, messageStoreConfig.isEnableRocksdbHyperClockCache())).
                 setWholeKeyFiltering(true);
+        applyTableFormatConfig(blockBasedTableConfig,
+            messageStoreConfig.getRocksdbFormatVersion(),
+            messageStoreConfig.isEnableRocksdbPartitionedIndexFilters());
 
-        MessageStoreConfig messageStoreConfig = messageStore.getMessageStoreConfig();
         ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
         CompactionOptionsUniversal compactionOption = new CompactionOptionsUniversal().
                 setSizeRatio(100).
@@ -97,17 +127,24 @@ public class RocksDBOptionsFactory {
     }
 
     public static ColumnFamilyOptions createOffsetCFOptions() {
+        return createOffsetCFOptions(null);
+    }
+
+    public static ColumnFamilyOptions createOffsetCFOptions(final MessageStoreConfig messageStoreConfig) {
+        boolean useHyperClock = messageStoreConfig == null || messageStoreConfig.isEnableRocksdbHyperClockCache();
+        int formatVersion = messageStoreConfig != null ? messageStoreConfig.getRocksdbFormatVersion() : 5;
         BlockBasedTableConfig blockBasedTableConfig = new BlockBasedTableConfig().
-                setFormatVersion(5).
+                setFormatVersion(formatVersion).
                 setIndexType(IndexType.kBinarySearch).
                 setDataBlockIndexType(DataBlockIndexType.kDataBlockBinarySearch).
                 setBlockSize(32 * SizeUnit.KB).
                 setFilterPolicy(new BloomFilter(16, false)).
+                setOptimizeFiltersForMemory(true).
                 setCacheIndexAndFilterBlocks(false).
                 setCacheIndexAndFilterBlocksWithHighPriority(true).
                 setPinL0FilterAndIndexBlocksInCache(false).
                 setPinTopLevelIndexAndFilter(true).
-                setBlockCache(new LRUCache(128 * SizeUnit.MB, 8, false)).
+                setBlockCache(createBlockCache(128 * SizeUnit.MB, useHyperClock)).
                 setWholeKeyFiltering(true);
 
         ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
@@ -139,11 +176,12 @@ public class RocksDBOptionsFactory {
             .setBlockSize(32 * SizeUnit.KB)
             .setMetadataBlockSize(4 * SizeUnit.KB)
             .setFilterPolicy(new BloomFilter(16, false))
+            .setOptimizeFiltersForMemory(true)
             .setCacheIndexAndFilterBlocks(false)
             .setCacheIndexAndFilterBlocksWithHighPriority(true)
             .setPinL0FilterAndIndexBlocksInCache(false)
             .setPinTopLevelIndexAndFilter(true)
-            .setBlockCache(new LRUCache(blockCacheSize, 8, false))
+            .setBlockCache(createBlockCache(blockCacheSize, true))
             .setWholeKeyFiltering(true);
 
         CompactionOptionsUniversal compactionOption = new CompactionOptionsUniversal()
@@ -225,11 +263,12 @@ public class RocksDBOptionsFactory {
             .setBlockSize(128 * SizeUnit.KB)
             .setMetadataBlockSize(4 * SizeUnit.KB)
             .setFilterPolicy(new BloomFilter(16, false))
+            .setOptimizeFiltersForMemory(true)
             .setCacheIndexAndFilterBlocks(false)
             .setCacheIndexAndFilterBlocksWithHighPriority(true)
             .setPinL0FilterAndIndexBlocksInCache(false)
             .setPinTopLevelIndexAndFilter(true)
-            .setBlockCache(new LRUCache(2048 * SizeUnit.MB, 8, false))
+            .setBlockCache(createBlockCache(2048 * SizeUnit.MB, true))
             .setWholeKeyFiltering(true);
 
         //noinspection resource
@@ -267,11 +306,12 @@ public class RocksDBOptionsFactory {
             .setBlockSize(128 * SizeUnit.KB)
             .setMetadataBlockSize(4 * SizeUnit.KB)
             .setFilterPolicy(new BloomFilter(16, false))
+            .setOptimizeFiltersForMemory(true)
             .setCacheIndexAndFilterBlocks(false)
             .setCacheIndexAndFilterBlocksWithHighPriority(true)
             .setPinL0FilterAndIndexBlocksInCache(false)
             .setPinTopLevelIndexAndFilter(true)
-            .setBlockCache(new LRUCache(1024 * SizeUnit.MB, 8, false))
+            .setBlockCache(createBlockCache(1024 * SizeUnit.MB, true))
             .setWholeKeyFiltering(true);
 
         CompactionOptionsUniversal compactionOption = new CompactionOptionsUniversal()
@@ -318,11 +358,12 @@ public class RocksDBOptionsFactory {
             .setBlockSize(128 * SizeUnit.KB)
             .setMetadataBlockSize(4 * SizeUnit.KB)
             .setFilterPolicy(new BloomFilter(16, false))
+            .setOptimizeFiltersForMemory(true)
             .setCacheIndexAndFilterBlocks(false)
             .setCacheIndexAndFilterBlocksWithHighPriority(true)
             .setPinL0FilterAndIndexBlocksInCache(false)
             .setPinTopLevelIndexAndFilter(true)
-            .setBlockCache(new LRUCache(1024 * SizeUnit.MB, 8, false))
+            .setBlockCache(createBlockCache(1024 * SizeUnit.MB, true))
             .setWholeKeyFiltering(true);
 
         CompactionOptionsUniversal compactionOption = new CompactionOptionsUniversal()

@@ -104,6 +104,11 @@ public class CqCompactionFilterJni {
     public static native void setMinPhyOffset0(long filterPtr, long minPhyOffset);
 
     /**
+     * Read the current minPhyOffset threshold from an existing native filter.
+     */
+    public static native long getMinPhyOffset0(long filterPtr);
+
+    /**
      * Delete the native CqCompactionFilter instance.
      * Must only be called after all compaction threads have stopped.
      */
@@ -123,17 +128,13 @@ public class CqCompactionFilterJni {
     }
 
     /**
-     * Create the native filter and set it on the ColumnFamilyOptions.
-     * Returns the native pointer for later threshold updates.
+     * Create a native filter instance and bind it to the given {@link ColumnFamilyOptions}.
+     * Returns the native pointer so the caller can manage per-instance threshold updates
+     * and destruction independently.
      */
     @SuppressWarnings("UnusedReturnValue")
     public static long createAndSetFilter(ColumnFamilyOptions options) {
         synchronized (FILTER_LOCK) {
-            long oldPtr = NATIVE_FILTER_PTR.getAndSet(0);
-            if (oldPtr != 0) {
-                destroyNativeFilter0(oldPtr);
-                log.warn("CqCompactionFilter replaced without explicit destroy");
-            }
             long ptr = createNativeFilter0();
             NATIVE_FILTER_PTR.set(ptr);
             setNativeFilter(options, ptr);
@@ -142,7 +143,17 @@ public class CqCompactionFilterJni {
     }
 
     /**
-     * Update the minPhyOffset on the current native filter.
+     * Update the minPhyOffset on a specific native filter instance.
+     */
+    public static void setMinPhyOffset(long filterPtr, long minPhyOffset) {
+        if (filterPtr != 0) {
+            setMinPhyOffset0(filterPtr, minPhyOffset);
+            log.info("CqCompactionFilter[ptr={}] setMinPhyOffset={}", filterPtr, minPhyOffset);
+        }
+    }
+
+    /**
+     * Update the minPhyOffset on the most recently created native filter.
      */
     public static void setMinPhyOffset(long minPhyOffset) {
         synchronized (FILTER_LOCK) {
@@ -155,7 +166,32 @@ public class CqCompactionFilterJni {
     }
 
     /**
-     * Destroy the native filter. Must be called only after
+     * Get the minPhyOffset on a specific native filter instance.
+     */
+    public static long getMinPhyOffset(long filterPtr) {
+        if (filterPtr != 0) {
+            return getMinPhyOffset0(filterPtr);
+        }
+        return 0L;
+    }
+
+    /**
+     * Destroy a specific native filter instance. Must be called only after
+     * {@code cancelAllBackgroundWork(true)} ensures no compaction thread is running.
+     */
+    public static void destroyNativeFilter(long filterPtr) {
+        if (filterPtr == 0) {
+            return;
+        }
+        synchronized (FILTER_LOCK) {
+            NATIVE_FILTER_PTR.compareAndSet(filterPtr, 0);
+            destroyNativeFilter0(filterPtr);
+            log.info("CqCompactionFilter[ptr={}] destroyed", filterPtr);
+        }
+    }
+
+    /**
+     * Destroy the most recently created native filter. Must be called only after
      * cancelAllBackgroundWork(true) ensures no compaction thread is running.
      */
     public static void destroyNativeFilter() {

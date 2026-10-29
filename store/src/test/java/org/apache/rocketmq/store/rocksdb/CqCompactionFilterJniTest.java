@@ -64,12 +64,40 @@ public class CqCompactionFilterJniTest {
 
         long ptr = CqCompactionFilterJni.createNativeFilter0();
         Assert.assertTrue("Native filter pointer should be non-zero", ptr != 0);
+        try {
+            CqCompactionFilterJni.setMinPhyOffset0(ptr, 1000);
+            Assert.assertEquals(1000L, CqCompactionFilterJni.getMinPhyOffset(ptr));
+            CqCompactionFilterJni.setMinPhyOffset0(ptr, Long.MAX_VALUE);
+            Assert.assertEquals(Long.MAX_VALUE, CqCompactionFilterJni.getMinPhyOffset(ptr));
 
-        CqCompactionFilterJni.setMinPhyOffset0(ptr, 1000);
-        CqCompactionFilterJni.setMinPhyOffset0(ptr, Long.MAX_VALUE);
+            try (ColumnFamilyOptions options = new ColumnFamilyOptions()) {
+                CqCompactionFilterJni.setNativeFilter(options, ptr);
+            }
+        } finally {
+            CqCompactionFilterJni.destroyNativeFilter(ptr);
+        }
+    }
 
-        try (ColumnFamilyOptions options = new ColumnFamilyOptions()) {
-            CqCompactionFilterJni.setNativeFilter(options, ptr);
+    @Test
+    public void testMultipleStorageInstancesIsolation() throws Exception {
+        String dbPath2 = Files.createTempDirectory("rocksdb-cq-compaction-2-" + UUID.randomUUID()).toString();
+        MessageStore mockStore2 = Mockito.mock(MessageStore.class);
+        Mockito.when(mockStore2.getMinPhyOffset()).thenReturn(5000L);
+        Mockito.when(mockStore2.getMessageStoreConfig()).thenReturn(new MessageStoreConfig());
+        ConsumeQueueRocksDBStorage storage2 = new ConsumeQueueRocksDBStorage(mockStore2, dbPath2);
+        try {
+            Assert.assertTrue(storage.start());
+            Assert.assertTrue(storage2.start());
+            Assert.assertNotEquals(storage.getNativeFilterPtr(), storage2.getNativeFilterPtr());
+            Assert.assertEquals(0L, CqCompactionFilterJni.getMinPhyOffset(storage.getNativeFilterPtr()));
+            Assert.assertEquals(5000L, CqCompactionFilterJni.getMinPhyOffset(storage2.getNativeFilterPtr()));
+
+            storage.manualCompaction(12345L);
+            Assert.assertEquals(12345L, CqCompactionFilterJni.getMinPhyOffset(storage.getNativeFilterPtr()));
+            Assert.assertEquals(5000L, CqCompactionFilterJni.getMinPhyOffset(storage2.getNativeFilterPtr()));
+        } finally {
+            storage2.shutdown();
+            storage2.destroy();
         }
     }
 

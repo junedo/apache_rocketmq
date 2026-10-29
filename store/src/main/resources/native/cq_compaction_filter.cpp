@@ -236,8 +236,58 @@ public:
     bool Filter(int /*level*/, const rocksdb::Slice& /*key*/,
                 const rocksdb::Slice& existing_value, std::string* /*new_value*/,
                 bool* /*value_changed*/) const override {
-        static const int CQ_MIN_SIZE = 28;
-        if (existing_value.size() < static_cast<size_t>(CQ_MIN_SIZE)) {
+        return ShouldRemove(existing_value);
+    }
+
+    Decision FilterV2(int /*level*/, const rocksdb::Slice& /*key*/,
+                      ValueType value_type, const rocksdb::Slice& existing_value,
+                      std::string* /*new_value*/,
+                      std::string* /*skip_until*/) const override {
+        if (value_type == ValueType::kValue) {
+            return ShouldRemove(existing_value) ? Decision::kRemove : Decision::kKeep;
+        }
+        return Decision::kKeep;
+    }
+
+    Decision FilterV3(
+        int /*level*/, const rocksdb::Slice& /*key*/, ValueType value_type,
+        const rocksdb::Slice* existing_value,
+        const rocksdb::WideColumns* /*existing_columns*/,
+        std::string* /*new_value*/,
+        std::vector<std::pair<std::string, std::string>>* /*new_columns*/,
+        std::string* /*skip_until*/) const override {
+        if (value_type == ValueType::kValue && existing_value != nullptr) {
+            return ShouldRemove(*existing_value) ? Decision::kRemove : Decision::kKeep;
+        }
+        return Decision::kKeep;
+    }
+
+    Decision FilterV4(
+        int /*level*/, const rocksdb::Slice& /*key*/, ValueType value_type,
+        const rocksdb::Slice* existing_value,
+        const rocksdb::WideColumns* /*existing_columns*/,
+        std::string* /*new_value*/,
+        std::vector<std::pair<std::string, std::string>>* /*new_columns*/,
+        std::string* /*skip_until*/,
+        rocksdb::WideColumnBlobResolver* /*blob_resolver*/) const override {
+        if (value_type == ValueType::kValue && existing_value != nullptr) {
+            return ShouldRemove(*existing_value) ? Decision::kRemove : Decision::kKeep;
+        }
+        return Decision::kKeep;
+    }
+
+    void SetMinPhyOffset(int64_t offset) {
+        min_phy_offset_.store(offset, std::memory_order_relaxed);
+    }
+
+    int64_t GetMinPhyOffset() const {
+        return min_phy_offset_.load(std::memory_order_relaxed);
+    }
+
+private:
+    inline bool ShouldRemove(const rocksdb::Slice& existing_value) const {
+        static const size_t CQ_MIN_SIZE = 28;
+        if (existing_value.size() < CQ_MIN_SIZE) {
             return false;
         }
         const unsigned char* data =
@@ -256,11 +306,6 @@ public:
         return phy_offset < min_offset;
     }
 
-    void SetMinPhyOffset(int64_t offset) {
-        min_phy_offset_.store(offset, std::memory_order_relaxed);
-    }
-
-private:
     std::atomic<int64_t> min_phy_offset_{0};
 };
 
@@ -284,6 +329,13 @@ Java_org_apache_rocketmq_store_rocksdb_CqCompactionFilterJni_setMinPhyOffset0(
     JNIEnv* env, jclass clazz, jlong filterPtr, jlong minPhyOffset) {
     CqCompactionFilter* filter = reinterpret_cast<CqCompactionFilter*>(filterPtr);
     filter->SetMinPhyOffset(minPhyOffset);
+}
+
+JNIEXPORT jlong JNICALL
+Java_org_apache_rocketmq_store_rocksdb_CqCompactionFilterJni_getMinPhyOffset0(
+    JNIEnv* env, jclass clazz, jlong filterPtr) {
+    CqCompactionFilter* filter = reinterpret_cast<CqCompactionFilter*>(filterPtr);
+    return static_cast<jlong>(filter->GetMinPhyOffset());
 }
 
 JNIEXPORT void JNICALL
