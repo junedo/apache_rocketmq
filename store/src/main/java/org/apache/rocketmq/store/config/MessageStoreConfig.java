@@ -532,6 +532,14 @@ public class MessageStoreConfig {
 
     private long rocksdbWalFileRollingThreshold = SizeUnit.GB;
 
+    private int rocksdbFormatVersion = 5;
+
+    private boolean enableRocksdbHyperClockCache = true;
+
+    private boolean enableRocksdbPartitionedIndexFilters = false;
+
+    private boolean enableRocksdbAsyncIo = true;
+
     /**
      * Note: For correctness, this switch should be enabled only if the previous startup was configured with SYNC_FLUSH.
      * This switch is not recommended for normal use cases (include master-slave or controller mode).
@@ -2178,6 +2186,38 @@ public class MessageStoreConfig {
 
     public void setRocksdbWalFileRollingThreshold(long rocksdbWalFileRollingThreshold) {
         this.rocksdbWalFileRollingThreshold = rocksdbWalFileRollingThreshold;
+    }
+
+    public int getRocksdbFormatVersion() {
+        return rocksdbFormatVersion;
+    }
+
+    public void setRocksdbFormatVersion(int rocksdbFormatVersion) {
+        this.rocksdbFormatVersion = rocksdbFormatVersion;
+    }
+
+    public boolean isEnableRocksdbHyperClockCache() {
+        return enableRocksdbHyperClockCache;
+    }
+
+    public void setEnableRocksdbHyperClockCache(boolean enableRocksdbHyperClockCache) {
+        this.enableRocksdbHyperClockCache = enableRocksdbHyperClockCache;
+    }
+
+    public boolean isEnableRocksdbPartitionedIndexFilters() {
+        return enableRocksdbPartitionedIndexFilters;
+    }
+
+    public void setEnableRocksdbPartitionedIndexFilters(boolean enableRocksdbPartitionedIndexFilters) {
+        this.enableRocksdbPartitionedIndexFilters = enableRocksdbPartitionedIndexFilters;
+    }
+
+    public boolean isEnableRocksdbAsyncIo() {
+        return enableRocksdbAsyncIo;
+    }
+
+    public void setEnableRocksdbAsyncIo(boolean enableRocksdbAsyncIo) {
+        this.enableRocksdbAsyncIo = enableRocksdbAsyncIo;
     }
 
     public int getSpinLockCollisionRetreatOptimalDegree() {

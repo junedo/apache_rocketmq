@@ -21,11 +21,13 @@ import java.io.File;
 import org.apache.rocketmq.common.UtilAll;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.DataBlockIndexType;
+import org.rocksdb.HyperClockCache;
 import org.rocksdb.IndexType;
 import org.rocksdb.InfoLogLevel;
 import org.rocksdb.LRUCache;
@@ -38,19 +40,31 @@ import org.rocksdb.WALRecoveryMode;
 import org.rocksdb.util.SizeUnit;
 
 public class ConfigHelper {
+    public static Cache createBlockCache(long capacity, boolean useHyperClockCache) {
+        if (useHyperClockCache) {
+            return new HyperClockCache(capacity, 0L, 8, false);
+        }
+        return new LRUCache(capacity, 8, false);
+    }
+
     public static ColumnFamilyOptions createConfigColumnFamilyOptions() {
+        return createConfigColumnFamilyOptions(true);
+    }
+
+    public static ColumnFamilyOptions createConfigColumnFamilyOptions(boolean useHyperClockCache) {
         BlockBasedTableConfig blockBasedTableConfig = new BlockBasedTableConfig().
             setFormatVersion(5).
             setIndexType(IndexType.kBinarySearch).
             setDataBlockIndexType(DataBlockIndexType.kDataBlockBinarySearch).
             setBlockSize(32 * SizeUnit.KB).
             setFilterPolicy(new BloomFilter(16, false)).
+            setOptimizeFiltersForMemory(true).
             // Indicating if we'd put index/filter blocks to the block cache.
             setCacheIndexAndFilterBlocks(true).
             setCacheIndexAndFilterBlocksWithHighPriority(true).
             setPinL0FilterAndIndexBlocksInCache(false).
             setPinTopLevelIndexAndFilter(true).
-            setBlockCache(new LRUCache(4 * SizeUnit.MB, 8, false)).
+            setBlockCache(createBlockCache(32 * SizeUnit.MB, useHyperClockCache)).
             setWholeKeyFiltering(true);
 
         ColumnFamilyOptions options = new ColumnFamilyOptions();

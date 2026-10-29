@@ -93,6 +93,7 @@ public abstract class AbstractRocksDBStorage {
 
     protected volatile boolean loaded;
     protected CompressionType compressionType = CompressionType.LZ4_COMPRESSION;
+    protected boolean enableAsyncIo = true;
     private volatile boolean closed;
 
     private final Semaphore reloadPermit = new Semaphore(1);
@@ -145,6 +146,7 @@ public abstract class AbstractRocksDBStorage {
         this.readOptions.setPrefixSameAsStart(true);
         this.readOptions.setTotalOrderSeek(false);
         this.readOptions.setTailing(false);
+        this.readOptions.setAsyncIo(this.enableAsyncIo);
     }
 
     protected void initTotalOrderReadOptions() {
@@ -152,6 +154,7 @@ public abstract class AbstractRocksDBStorage {
         this.totalOrderReadOptions.setPrefixSameAsStart(false);
         this.totalOrderReadOptions.setTotalOrderSeek(true);
         this.totalOrderReadOptions.setTailing(false);
+        this.totalOrderReadOptions.setAsyncIo(this.enableAsyncIo);
     }
 
     protected void initCompactRangeOptions() {
@@ -359,6 +362,7 @@ public abstract class AbstractRocksDBStorage {
             readOptions = new ReadOptions();
             readOptions.setTotalOrderSeek(true);
             readOptions.setReadaheadSize(4L * 1024 * 1024);
+            readOptions.setAsyncIo(this.enableAsyncIo);
             boolean hasStart = !ArrayUtils.isEmpty(start);
             boolean hasPrefix = !ArrayUtils.isEmpty(prefix);
 
@@ -389,10 +393,16 @@ public abstract class AbstractRocksDBStorage {
                 if (hasPrefix && !checkPrefix(key, prefix)) {
                     break;
                 }
-                callback.accept(iterator.key(), iterator.value());
+                callback.accept(key, iterator.value());
                 iterator.next();
             }
         } finally {
+            if (iterator != null) {
+                iterator.close();
+            }
+            if (readOptions != null) {
+                readOptions.close();
+            }
             if (startSlice != null) {
                 startSlice.close();
             }
@@ -401,12 +411,6 @@ public abstract class AbstractRocksDBStorage {
             }
             if (prefixSlice != null) {
                 prefixSlice.close();
-            }
-            if (readOptions != null) {
-                readOptions.close();
-            }
-            if (iterator != null) {
-                iterator.close();
             }
         }
     }

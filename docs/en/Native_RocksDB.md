@@ -19,7 +19,7 @@ Maintaining a fork of RocksDB's Java bindings has several costs:
 
 ## Solution
 
-Replace `rocketmq-rocksdb` with the official `org.rocksdb:rocksdbjni:8.4.4` and move the single custom compaction filter into a standalone native shim.
+Replace `rocketmq-rocksdb` with the official `org.rocksdb:rocksdbjni:11.8.1` and move the single custom compaction filter into a standalone native shim.
 
 ### Why a native shim is needed
 
@@ -85,7 +85,7 @@ The `CqCompactionFilter` uses `std::atomic<int64_t>` with `memory_order_relaxed`
 
 | File | Change |
 |------|--------|
-| `pom.xml` | `rocksdb.version` → `rocksdbjni.version=8.4.4`; dependency changed to `org.rocksdb:rocksdbjni` |
+| `pom.xml` | `rocksdb.version` → `rocksdbjni.version=11.8.1`; dependency changed to `org.rocksdb:rocksdbjni` |
 | `common/pom.xml` | `rocketmq-rocksdb` → `org.rocksdb:rocksdbjni` |
 | `common/.../config/AbstractRocksDBStorage.java` | `manualCompactionDefaultCfRange` enhanced with `estimateNumKeys` logging (before/after key count, elapsed time, reduction ratio); `manualCompaction` removed unused `minPhyOffset` parameter |
 | `store/.../rocksdb/ConsumeQueueCompactionFilterFactory.java` | **Deleted** — replaced by native shim |
@@ -101,14 +101,14 @@ The `CqCompactionFilter` uses `std::atomic<int64_t>` with `memory_order_relaxed`
 
 ## Building the native shim
 
-Prerequisites: `g++` / `clang++`, RocksDB C++ headers matching `rocksdbjni` version (8.4.4), JNI headers from your JDK.
+Prerequisites: `g++` / `clang++`, RocksDB C++ headers matching `rocksdbjni` version (11.8.1), JNI headers from your JDK.
 
 ### Linux (x86_64)
 
 ```bash
 # 1. Download matching RocksDB headers (only headers needed — no linking against rocksdbjni)
-wget https://github.com/facebook/rocksdb/archive/refs/tags/v8.4.4.tar.gz
-tar xzf v8.4.4.tar.gz rocksdb-8.4.4/include --strip-components=1
+wget https://github.com/facebook/rocksdb/archive/refs/tags/v11.8.1.tar.gz
+tar xzf v11.8.1.tar.gz rocksdb-11.8.1/include --strip-components=1
 
 # 2. Compile the self-contained shim
 export JAVA_HOME=/usr/lib/jvm/java-8   # or your JDK path
@@ -129,20 +129,20 @@ nm -D libcq_compaction_filter.so | grep " U " | grep rocksdb
 cp libcq_compaction_filter.so store/src/main/resources/native/
 ```
 
-### macOS (arm64 / x86_64)
+### macOS (universal arm64 + x86_64)
 
 ```bash
 # 1. Download matching RocksDB headers
 #    Use ghproxy.net mirror if github.com is blocked:
-curl -sL "https://ghproxy.net/https://github.com/facebook/rocksdb/archive/refs/tags/v8.4.4.tar.gz" -o /tmp/rocksdb-8.4.4.tar.gz
-tar xzf /tmp/rocksdb-8.4.4.tar.gz -C /tmp rocksdb-8.4.4/include --strip-components=1
+curl -sL "https://github.com/facebook/rocksdb/archive/refs/tags/v11.8.1.tar.gz" -o /tmp/rocksdb-11.8.1.tar.gz
+tar xzf /tmp/rocksdb-11.8.1.tar.gz --strip-components=1 -C /tmp rocksdb-11.8.1/include
 # Or use a local RocksDB checkout if available:
 # ROCKSDB_INCLUDE=/path/to/rocksdb/include
 
-# 2. Compile the self-contained shim (no linking against rocksdbjni needed)
+# 2. Compile the self-contained shim (universal binary, no linking against rocksdbjni needed)
 export JAVA_HOME=$(/usr/libexec/java_home)
-ROCKSDB_INCLUDE=${ROCKSDB_INCLUDE:-./include}  # adjust to your headers location
-clang++ -shared -fPIC -O2 -std=c++17 -fno-rtti \
+ROCKSDB_INCLUDE=${ROCKSDB_INCLUDE:-/tmp/include}  # adjust to your headers location
+clang++ -arch arm64 -arch x86_64 -shared -fPIC -O2 -std=c++17 -fno-rtti \
     -I"$ROCKSDB_INCLUDE" \
     -I${JAVA_HOME}/include \
     -I${JAVA_HOME}/include/darwin \
@@ -168,14 +168,14 @@ set "SDK=C:\Program Files (x86)\Windows Kits\10"
 set "JAVA_HOME=C:\path\to\jdk8"
 
 # 2. Extract RocksDB headers
-curl -LO https://github.com/facebook/rocksdb/archive/refs/tags/v8.4.4.tar.gz
-tar xzf v8.4.4.tar.gz rocksdb-8.4.4/include --strip-components=1
+curl -LO https://github.com/facebook/rocksdb/archive/refs/tags/v11.8.1.tar.gz
+tar xzf v11.8.1.tar.gz rocksdb-11.8.1/include --strip-components=1
 
 # 3. Compile with MSVC cl.exe (no linking against rocksdbjni needed)
 cl.exe /LD /O2 /std:c++17 /GR- /EHsc /utf-8 ^
    /I"%JAVA_HOME%\include" ^
    /I"%JAVA_HOME%\include\win32" ^
-   /I"rocksdb-8.4.4\include" ^
+   /I"rocksdb-11.8.1\include" ^
    /I"%VCTools%\include" ^
    /I"%SDK%\Include\10.0.19041.0\ucrt" ^
    /I"%SDK%\Include\10.0.19041.0\shared" ^
@@ -213,15 +213,14 @@ mvn test -pl store -Dtest=CqCompactionFilterJniTest -Djacoco.skip=true
 |----------|-------------|--------------|--------|
 | Linux (glibc) | `libcq_compaction_filter.so` | x86_64 | Pre-built |
 | Linux (glibc) | `libcq_compaction_filter_aarch64.so` | aarch64 | Pre-built |
-| macOS | `libcq_compaction_filter.dylib` | arm64 | Pre-built |
-| macOS | `libcq_compaction_filter.dylib` | x86_64 | Requires rebuild |
+| macOS | `libcq_compaction_filter.dylib` | arm64 / x86_64 (universal) | Pre-built |
 | Windows | `cq_compaction_filter.dll` | x86_64 | Pre-built |
 
 ## Limitations
 
 1. **Jacoco incompatibility** — The jacoco Java agent can cause native crashes when combined with dynamically loaded native libraries. Unit tests should be run with `-Djacoco.skip=true` when testing RocksDB functionality.
 
-2. **Global singleton filter** — `CqCompactionFilterJni` stores the native filter pointer in a static `AtomicLong NATIVE_FILTER_PTR`. Only one filter instance is tracked globally per JVM. If multiple `ConsumeQueueRocksDBStorage` instances exist (e.g., in tests or multi-Broker processes), `setMinPhyOffset()` always updates the last-created filter. Earlier instances lose their threshold updates silently.
+2. **Per-instance filter tracking** — Each `ConsumeQueueRocksDBStorage` instance retains its own `nativeFilterPtr` handle and updates/destroys it independently via `CqCompactionFilterJni.setMinPhyOffset(ptr, offset)` and `CqCompactionFilterJni.destroyNativeFilter(ptr)`. Static convenience methods on `CqCompactionFilterJni` continue to operate on the most recently created filter for backward compatibility.
 
 3. **C++17 required** — The C++ source uses `std::atomic<int64_t>` which requires a C++17-capable compiler. All modern compilers (GCC 7+, Clang 5+, MSVC 2017+) support this.
 

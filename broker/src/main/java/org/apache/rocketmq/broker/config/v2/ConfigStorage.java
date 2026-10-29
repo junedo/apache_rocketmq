@@ -18,6 +18,7 @@ package org.apache.rocketmq.broker.config.v2;
 
 import com.google.common.base.Stopwatch;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocatorMetric;
 import io.netty.util.internal.PlatformDependent;
 import java.io.File;
@@ -36,14 +37,17 @@ import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.config.AbstractRocksDBStorage;
 import org.apache.rocketmq.common.config.ConfigHelper;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
+import org.rocksdb.AbstractSlice;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyOptions;
+import org.rocksdb.DirectSlice;
 import org.rocksdb.FlushOptions;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Slice;
+import org.rocksdb.Snapshot;
 import org.rocksdb.WriteBatch;
 import org.rocksdb.WriteOptions;
 
@@ -108,7 +112,8 @@ public class ConfigStorage extends AbstractRocksDBStorage {
             initOptions();
             List<ColumnFamilyDescriptor> cfDescriptors = new ArrayList<>();
 
-            ColumnFamilyOptions defaultOptions = ConfigHelper.createConfigColumnFamilyOptions();
+            ColumnFamilyOptions defaultOptions = ConfigHelper.createConfigColumnFamilyOptions(
+                this.messageStoreConfig == null || this.messageStoreConfig.isEnableRocksdbHyperClockCache());
             this.cfOptions.add(defaultOptions);
             cfDescriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, defaultOptions));
 
@@ -130,6 +135,7 @@ public class ConfigStorage extends AbstractRocksDBStorage {
     }
 
     protected void initOptions() {
+        this.enableAsyncIo = this.messageStoreConfig == null || this.messageStoreConfig.isEnableRocksdbAsyncIo();
         this.options = ConfigHelper.createConfigDBOptions();
         super.initOptions();
     }
@@ -149,6 +155,32 @@ public class ConfigStorage extends AbstractRocksDBStorage {
     }
 
     public byte[] get(ByteBuffer key) throws RocksDBException {
+        if (key.isDirect()) {
+            int initialCapacity = 4096;
+            ByteBuf valueBuf = AbstractRocksDBStorage.POOLED_ALLOCATOR.directBuffer(initialCapacity);
+            try {
+                ByteBuffer valueNioBuf = valueBuf.nioBuffer(0, initialCapacity);
+                ByteBuffer keySlice = key.slice();
+                int size = super.get(getDefaultCFHandle(), totalOrderReadOptions, keySlice, valueNioBuf);
+                if (size == RocksDB.NOT_FOUND) {
+                    return null;
+                }
+                if (size > initialCapacity) {
+                    valueBuf.capacity(size);
+                    valueNioBuf = valueBuf.nioBuffer(0, size);
+                    keySlice = key.slice();
+                    size = super.get(getDefaultCFHandle(), totalOrderReadOptions, keySlice, valueNioBuf);
+                    if (size == RocksDB.NOT_FOUND) {
+                        return null;
+                    }
+                }
+                byte[] result = new byte[size];
+                valueNioBuf.get(result);
+                return result;
+            } finally {
+                valueBuf.release();
+            }
+        }
         byte[] keyBytes = new byte[key.remaining()];
         key.get(keyBytes);
         return super.get(getDefaultCFHandle(), totalOrderReadOptions, keyBytes);
@@ -165,21 +197,164 @@ public class ConfigStorage extends AbstractRocksDBStorage {
     }
 
     public RocksIterator iterate(ByteBuffer beginKey, ByteBuffer endKey) {
-        try (ReadOptions readOptions = new ReadOptions()) {
+        ReadOptions readOptions = new ReadOptions();
+        AbstractSlice<?> upperBoundSlice = null;
+        try {
             readOptions.setTotalOrderSeek(true);
             readOptions.setTailing(false);
             readOptions.setAutoPrefixMode(true);
-            // Use DirectSlice till the follow issue is fixed:
-            // https://github.com/facebook/rocksdb/issues/13098
-            //
-            // readOptions.setIterateUpperBound(new DirectSlice(endKey));
-            byte[] buf = new byte[endKey.remaining()];
-            endKey.slice().get(buf);
-            readOptions.setIterateUpperBound(new Slice(buf));
+            readOptions.setAsyncIo(this.enableAsyncIo);
+            ByteBuffer endSliceBuf = endKey.slice();
+            if (endSliceBuf.isDirect()) {
+                upperBoundSlice = new DirectSlice(endSliceBuf, endSliceBuf.remaining());
+            } else {
+                byte[] buf = new byte[endSliceBuf.remaining()];
+                endSliceBuf.get(buf);
+                upperBoundSlice = new Slice(buf);
+            }
+            readOptions.setIterateUpperBound(upperBoundSlice);
 
             RocksIterator iterator = db.newIterator(defaultCFHandle, readOptions);
             iterator.seek(beginKey.slice());
-            return iterator;
+            return new ManagedRocksIterator(db, iterator, readOptions, upperBoundSlice);
+        } catch (RuntimeException e) {
+            readOptions.close();
+            if (upperBoundSlice != null) {
+                upperBoundSlice.close();
+            }
+            throw e;
+        }
+    }
+
+    private static class ManagedRocksIterator extends RocksIterator {
+        private final RocksIterator delegate;
+        private final ReadOptions readOptions;
+        private final AbstractSlice<?> upperBoundSlice;
+
+        ManagedRocksIterator(RocksDB db, RocksIterator delegate, ReadOptions readOptions,
+            AbstractSlice<?> upperBoundSlice) {
+            super(db, 0L);
+            disOwnNativeHandle();
+            this.delegate = delegate;
+            this.readOptions = readOptions;
+            this.upperBoundSlice = upperBoundSlice;
+        }
+
+        @Override
+        public boolean isValid() {
+            return delegate.isValid();
+        }
+
+        @Override
+        public void seekToFirst() {
+            delegate.seekToFirst();
+        }
+
+        @Override
+        public void seekToLast() {
+            delegate.seekToLast();
+        }
+
+        @Override
+        public void seek(byte[] target) {
+            delegate.seek(target);
+        }
+
+        @Override
+        public void seekForPrev(byte[] target) {
+            delegate.seekForPrev(target);
+        }
+
+        @Override
+        public void seek(ByteBuffer target) {
+            delegate.seek(target);
+        }
+
+        @Override
+        public void seekForPrev(ByteBuffer target) {
+            delegate.seekForPrev(target);
+        }
+
+        @Override
+        public void next() {
+            delegate.next();
+        }
+
+        @Override
+        public void prev() {
+            delegate.prev();
+        }
+
+        @Override
+        public void status() throws RocksDBException {
+            delegate.status();
+        }
+
+        @Override
+        public void refresh() throws RocksDBException {
+            delegate.refresh();
+        }
+
+        @Override
+        public void refresh(Snapshot snapshot) throws RocksDBException {
+            delegate.refresh(snapshot);
+        }
+
+        @Override
+        public byte[] key() {
+            return delegate.key();
+        }
+
+        @Override
+        public int key(byte[] key) {
+            return delegate.key(key);
+        }
+
+        @Override
+        public int key(byte[] key, int offset, int len) {
+            return delegate.key(key, offset, len);
+        }
+
+        @Override
+        public int key(ByteBuffer key) {
+            return delegate.key(key);
+        }
+
+        @Override
+        public byte[] value() {
+            return delegate.value();
+        }
+
+        @Override
+        public int value(ByteBuffer value) {
+            return delegate.value(value);
+        }
+
+        @Override
+        public int value(byte[] value) {
+            return delegate.value(value);
+        }
+
+        @Override
+        public int value(byte[] value, int offset, int len) {
+            return delegate.value(value, offset, len);
+        }
+
+        @Override
+        public void close() {
+            try {
+                delegate.close();
+            } finally {
+                try {
+                    if (readOptions != null) {
+                        readOptions.close();
+                    }
+                } finally {
+                    if (upperBoundSlice != null) {
+                        upperBoundSlice.close();
+                    }
+                }
+            }
         }
     }
 

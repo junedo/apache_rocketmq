@@ -30,6 +30,7 @@ import org.apache.rocketmq.store.DefaultMessageStore;
 import org.apache.rocketmq.store.queue.RocksDBConsumeQueueOffsetTable.PhyAndCQOffset;
 import org.apache.rocketmq.store.rocksdb.ConsumeQueueRocksDBStorage;
 import org.rocksdb.ColumnFamilyHandle;
+import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.WriteBatch;
 
@@ -90,6 +91,9 @@ public class RocksDBConsumeQueueTable {
      */
     private static final int DELETE_CQ_KEY_LENGTH_WITHOUT_TOPIC_BYTES = 4 + 1 + 1 + 4 + 1;
 
+    private static final ThreadLocal<Pair<ByteBuffer, ByteBuffer>> CQ_GET_BUFFER_LOCAL =
+        ThreadLocal.withInitial(RocksDBConsumeQueueTable::getCQByteBufferPair);
+
     private final ConsumeQueueRocksDBStorage rocksDBStorage;
     private final DefaultMessageStore messageStore;
 
@@ -117,6 +121,23 @@ public class RocksDBConsumeQueueTable {
 
     public ByteBuffer getCQInKV(final String topic, final int queueId, final long cqOffset) throws RocksDBException {
         final byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
+        if (this.rocksDBStorage.isLoaded()) {
+            Pair<ByteBuffer, ByteBuffer> cqBBPair = CQ_GET_BUFFER_LOCAL.get();
+            ByteBuffer keyBB = cqBBPair.getObject1();
+            int requiredKeyLen = CQ_KEY_LENGTH_WITHOUT_TOPIC_BYTES + topicBytes.length;
+            if (keyBB.capacity() < requiredKeyLen) {
+                keyBB = ByteBuffer.allocateDirect(requiredKeyLen);
+                cqBBPair.setObject1(keyBB);
+            }
+            buildCQKeyByteBuffer(keyBB, topicBytes, queueId, cqOffset);
+            ByteBuffer valueBB = cqBBPair.getObject2();
+            valueBB.position(0).limit(CQ_UNIT_SIZE);
+            int size = this.rocksDBStorage.getCQ(keyBB, valueBB);
+            if (size == RocksDB.NOT_FOUND) {
+                return null;
+            }
+            return valueBB;
+        }
         final ByteBuffer keyBB = buildCQKeyByteBuffer(topicBytes, queueId, cqOffset);
         byte[] value = this.rocksDBStorage.getCQ(keyBB.array());
         return (value != null) ? ByteBuffer.wrap(value) : null;

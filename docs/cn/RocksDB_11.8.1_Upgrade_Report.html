@@ -1,0 +1,878 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apache RocketMQ RocksDB 11.8.1 升级、兼容性适配与性能优化评审报告</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-surface: #1e293b;
+      --bg-elevated: #263349;
+      --border: #334155;
+      --text: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --success: #34d399;
+      --success-soft: rgba(52, 211, 153, 0.14);
+      --warning: #fbbf24;
+      --warning-soft: rgba(251, 191, 36, 0.14);
+      --danger: #f87171;
+      --danger-soft: rgba(248, 113, 113, 0.14);
+      --code-bg: #0b1120;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --bg-surface: #ffffff;
+        --bg-elevated: #f1f5f9;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --text-secondary: #475569;
+        --accent: #0284c7;
+        --accent-soft: rgba(2, 132, 199, 0.1);
+        --success: #059669;
+        --success-soft: rgba(5, 150, 105, 0.1);
+        --warning: #d97706;
+        --warning-soft: rgba(217, 119, 6, 0.1);
+        --danger: #dc2626;
+        --danger-soft: rgba(220, 38, 38, 0.1);
+        --code-bg: #0f172a;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.65;
+      padding-bottom: 64px;
+    }
+
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 28px;
+    }
+
+    header.hero {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(52, 211, 153, 0.06));
+      border-bottom: 1px solid var(--border);
+      padding: 44px 0 36px;
+      margin-bottom: 36px;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .badge-accent {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .badge-success {
+      background: var(--success-soft);
+      color: var(--success);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+    }
+
+    .badge-warning {
+      background: var(--warning-soft);
+      color: var(--warning);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 15px;
+      max-width: 920px;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .kpi-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+
+    .kpi-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .kpi-value {
+      font-size: 22px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--accent);
+    }
+
+    .kpi-desc {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      nav.toc {
+        position: static !important;
+      }
+    }
+
+    nav.toc {
+      position: sticky;
+      top: 24px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+
+    nav.toc h3 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+    }
+
+    nav.toc ul {
+      list-style: none;
+    }
+
+    nav.toc li {
+      margin-bottom: 8px;
+    }
+
+    nav.toc a {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13.5px;
+      display: block;
+      padding: 5px 8px;
+      border-radius: 6px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    nav.toc a:hover {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    section.card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+
+    section.card h2 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    section.card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 22px 0 10px;
+      color: var(--accent);
+    }
+
+    p {
+      margin-bottom: 12px;
+      font-size: 14.5px;
+    }
+
+    ul.bullet, ol.bullet {
+      padding-left: 20px;
+      margin-bottom: 14px;
+      font-size: 14.5px;
+    }
+
+    ul.bullet li, ol.bullet li {
+      margin-bottom: 6px;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: #e2e8f0;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.55;
+      padding: 16px 18px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      margin: 12px 0 16px;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    .diff-add {
+      color: #34d399;
+    }
+
+    .diff-del {
+      color: #f87171;
+    }
+
+    .diff-comment {
+      color: #94a3b8;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 18px;
+      font-size: 13.5px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--bg-elevated);
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    tr:hover td {
+      background: rgba(56, 189, 248, 0.04);
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 14px 18px;
+      border-radius: 0 8px 8px 0;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+
+    .callout.warn {
+      border-left-color: var(--warning);
+      background: var(--warning-soft);
+    }
+
+    .callout.success {
+      border-left-color: var(--success);
+      background: var(--success-soft);
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 768px) {
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .diagram-box {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin: 16px 0;
+      text-align: center;
+      overflow-x: auto;
+    }
+
+    .stat-pill {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .stat-add {
+      background: var(--success-soft);
+      color: var(--success);
+    }
+
+    .stat-del {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <div class="container">
+      <div class="badge-row">
+        <span class="badge badge-accent">Branch: feat/upgrade-rocksdb-11.8.1</span>
+        <span class="badge badge-success">RocksDB: 8.4.4 &rarr; 11.8.1</span>
+        <span class="badge badge-success">Checkstyle &amp; SpotBugs: 0 Violations</span>
+        <span class="badge badge-warning">16 Files Changed (+621 / -79)</span>
+      </div>
+      <h1>Apache RocketMQ RocksDB 11.8.1 升级、兼容性适配与性能优化评审报告</h1>
+      <p class="subtitle">
+        本报告总结了将 RocketMQ 底层 KV 存储引擎从 <code>org.rocksdb:rocksdbjni:8.4.4</code> 升级至最新 11.x 正式版（<code>11.8.1</code>）的完整改造方案，重点涵盖 C++ CompactionFilter 原生 Shim ABI/vtable 适配、多实例隔离、存量 SST 格式向后兼容，以及无锁 <code>HyperClockCache</code>、两级分区索引/过滤器、<code>ReadOptions.async_io</code> 与 <code>DirectSlice</code> / <code>DirectByteBuffer</code> 零拷贝读写路径优化。
+      </p>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">目标 RocksDB 版本</div>
+          <div class="kpi-value">11.8.1</div>
+          <div class="kpi-desc">Maven Central 最新 11.x 发行版，替代原 8.4.4</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">CQ 批量写入吞吐 (单测基准)</div>
+          <div class="kpi-value">2.79M / s</div>
+          <div class="kpi-desc">100 万条 ConsumeQueue 写入耗时 358 ms</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Native Filter 100W 压缩耗时</div>
+          <div class="kpi-value">147 ms</div>
+          <div class="kpi-desc">FilterV4 直通裁剪 50% 过期位点记录</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">验证通过测试用例</div>
+          <div class="kpi-value">50 / 50</div>
+          <div class="kpi-desc">覆盖 CQ、Offset、Config V2、Pop、Timer、Trans</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="layout">
+      <nav class="toc">
+        <h3>评审目录</h3>
+        <ul>
+          <li><a href="#sec-overview">1. 背景与目标概览</a></li>
+          <li><a href="#sec-arch">2. 整体架构演进</a></li>
+          <li><a href="#sec-compat">3. 兼容性保障方案</a></li>
+          <li><a href="#sec-perf">4. 核心性能优化详情</a></li>
+          <li><a href="#sec-config">5. 新增配置项与默认值</a></li>
+          <li><a href="#sec-files">6. 变更文件清单</a></li>
+          <li><a href="#sec-verify">7. 测试验证与压测数据</a></li>
+          <li><a href="#sec-risk">8. 升级与回滚风险评估</a></li>
+        </ul>
+      </nav>
+
+      <main>
+        <!-- Section 1 -->
+        <section id="sec-overview" class="card">
+          <h2>1. 背景与目标概览</h2>
+          <p>
+            在 RocketMQ 5.x 架构中，RocksDB 承担了多核心模块的状态与索引存储职责，包括：
+          </p>
+          <ul class="bullet">
+            <li><strong>ConsumeQueue 存储 (<code>ConsumeQueueRocksDBStorage</code>)</strong>：海量队列百万级 Topic/Queue 下的逻辑队列索引与物理偏移量映射。</li>
+            <li><strong>Broker 元数据存储 V2 (<code>ConfigStorage</code>)</strong>：Topic 配置、SubscriptionGroup 订阅组配置、ConsumerOffset 消费位点的高可靠持久化。</li>
+            <li><strong>Pop 消费状态存储 (<code>PopConsumerRocksdbStore</code>)</strong>：Pop 消费模式下的飞行消息状态与定时扫描。</li>
+            <li><strong>消息扩展存储 (<code>MessageRocksDBStorage</code> / RIP-82)</strong>：基于 RocksDB 的 Timer 定时消息、Transaction 半消息以及 Message Index 索引。</li>
+          </ul>
+          <p>
+            此前版本使用 <code>rocksdbjni:8.4.4</code>（及早期分支定制的 <code>rocketmq-rocksdb:1.0.2</code>）。升级至 RocksDB 11.x（<code>11.8.1</code>）面临三大核心挑战，也是本次评审的重点：
+          </p>
+          <ol class="bullet">
+            <li><strong>C++ Native Shim ABI 兼容性</strong>：RocksDB 11.x 在 <code>rocksdb::CompactionFilter</code> 虚函数表中新增了 <code>FilterV4</code> 与 <code>SupportsFilterV4</code>，且修改了基类 <code>Configurable::RegisteredOptions</code> 的内存布局，若不更新原生 Shim 会导致虚表错位或 JVM 崩溃。</li>
+            <li><strong>高并发读锁争用与内存效率</strong>：原配置全量使用 <code>LRUCache</code>（8 分片互斥锁），在高并发拉取与点查场景下存在明顯的 Cache 锁竞争；同时缺少对分区索引/过滤器与异步预取（<code>async_io</code>）的支持。</li>
+            <li><strong>JNI 边界冗余内存拷贝</strong>：<code>ConfigStorage</code> 与 <code>RocksDBConsumeQueueTable</code> 在点查和范围扫描时频繁创建堆内 <code>byte[]</code> 并触发 JNI 拷贝，且 <code>ConfigStorage.iterate()</code> 存在原生 <code>Slice</code> 句柄未随迭代器释放的隐患。</li>
+          </ol>
+        </section>
+
+        <!-- Section 2 -->
+        <section id="sec-arch" class="card">
+          <h2>2. 整体架构演进</h2>
+          <div class="diagram-box">
+            <svg viewBox="0 0 880 390" width="100%" height="auto" xmlns="http://www.w3.org/2000/svg" style="max-width: 840px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;">
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+                </marker>
+              </defs>
+              <!-- Layer 1: RocketMQ Java Storage Layer -->
+              <rect x="20" y="15" width="840" height="95" rx="10" fill="rgba(56, 189, 248, 0.08)" stroke="#38bdf8" stroke-width="1.5"/>
+              <text x="36" y="38" fill="#38bdf8" font-size="13" font-weight="bold">RocketMQ Java 存储层 (Zero-Copy Direct ByteBuffer / DirectSlice)</text>
+
+              <rect x="36" y="50" width="190" height="46" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="131" y="71" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">ConsumeQueueStorage</text>
+              <text x="131" y="87" fill="#94a3b8" font-size="10.5" text-anchor="middle">ThreadLocal DirectBB getDirect</text>
+
+              <rect x="242" y="50" width="190" height="46" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="337" y="71" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">ConfigStorage (V2)</text>
+              <text x="337" y="87" fill="#94a3b8" font-size="10.5" text-anchor="middle">Pooled DirectBB + DirectSlice</text>
+
+              <rect x="448" y="50" width="190" height="46" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="543" y="71" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">MessageRocksDBStorage</text>
+              <text x="543" y="87" fill="#94a3b8" font-size="10.5" text-anchor="middle">Timer / Trans / Index</text>
+
+              <rect x="654" y="50" width="190" height="46" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="749" y="71" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">PopConsumerRocksdbStore</text>
+              <text x="749" y="87" fill="#94a3b8" font-size="10.5" text-anchor="middle">Pop State &amp; Scan</text>
+
+              <!-- Layer 2: JNI & Native Shim Layer -->
+              <rect x="20" y="140" width="840" height="95" rx="10" fill="rgba(52, 211, 153, 0.08)" stroke="#34d399" stroke-width="1.5"/>
+              <text x="36" y="163" fill="#34d399" font-size="13" font-weight="bold">JNI 与原生 Shim 层 (Per-Instance Handle Isolation &amp; 11.8.1 ABI)</text>
+
+              <rect x="36" y="175" width="380" height="46" rx="6" fill="#1e293b" stroke="#34d399"/>
+              <text x="226" y="196" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">CqCompactionFilterJni + libcq_compaction_filter</text>
+              <text x="226" y="212" fill="#94a3b8" font-size="10.5" text-anchor="middle">实例级 nativeFilterPtr 隔离 | FilterV4/V3/V2 直通实现</text>
+
+              <rect x="448" y="175" width="396" height="46" rx="6" fill="#1e293b" stroke="#34d399"/>
+              <text x="646" y="196" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">org.rocksdb:rocksdbjni:11.8.1</text>
+              <text x="646" y="212" fill="#94a3b8" font-size="10.5" text-anchor="middle">getDirect / putDirect / DirectSlice(ByteBuffer, len)</text>
+
+              <!-- Layer 3: RocksDB 11.8.1 C++ Engine -->
+              <rect x="20" y="265" width="840" height="105" rx="10" fill="rgba(251, 191, 36, 0.08)" stroke="#fbbf24" stroke-width="1.5"/>
+              <text x="36" y="288" fill="#fbbf24" font-size="13" font-weight="bold">RocksDB 11.8.1 C++ 核心存储引擎</text>
+
+              <rect x="36" y="302" width="250" height="52" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="161" y="324" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">Lock-Free HyperClockCache</text>
+              <text x="161" y="341" fill="#94a3b8" font-size="10.5" text-anchor="middle">无锁 CLOCK 替换分片互斥锁 LRUCache</text>
+
+              <rect x="315" y="302" width="250" height="52" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="440" y="324" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">Async I/O &amp; Partitioned Filters</text>
+              <text x="440" y="341" fill="#94a3b8" font-size="10.5" text-anchor="middle">ReadOptions.async_io + 两级分区索引</text>
+
+              <rect x="594" y="302" width="250" height="52" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="719" y="324" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">SST Format v5 / v6 Engine</text>
+              <text x="719" y="341" fill="#94a3b8" font-size="10.5" text-anchor="middle">默认 v5 100% 兼容存量 SST / 支持切换 v6</text>
+
+              <!-- Arrows -->
+              <line x1="131" y1="96" x2="180" y2="175" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <line x1="337" y1="96" x2="540" y2="175" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <line x1="543" y1="96" x2="620" y2="175" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <line x1="749" y1="96" x2="720" y2="175" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <line x1="226" y1="221" x2="226" y2="302" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+              <line x1="646" y1="221" x2="646" y2="302" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrow)"/>
+            </svg>
+          </div>
+        </section>
+
+        <!-- Section 3 -->
+        <section id="sec-compat" class="card">
+          <h2>3. 兼容性保障方案 (ABI / Native Shim / 存量数据)</h2>
+
+          <h3>3.1 RocksDB 8.4.4 &rarr; 11.8.1 C++ 头文件与虚函数表 (vtable) 差异分析</h3>
+          <p>
+            <code>libcq_compaction_filter</code> 通过在 C++ 中直接继承 <code>rocksdb::CompactionFilter</code> 并内联填充 <code>Configurable</code> / <code>Customizable</code> 的虚表桩方法实现自包含（不依赖 <code>DT_NEEDED librocksdbjni</code>）。对比 <code>v8.4.4</code> 与 <code>v11.8.1</code> 头文件，存在两处影响二进制兼容性的关键变更：
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>C++ 头文件</th>
+                <th>RocksDB 8.4.4</th>
+                <th>RocksDB 11.8.1</th>
+                <th>影响与适配方案</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>rocksdb/compaction_filter.h</code></td>
+                <td>虚表仅包含 <code>Filter</code>、<code>FilterMergeOperand</code>、<code>FilterV2</code>、<code>FilterV3</code>、<code>PrepareBlobOutput</code>...</td>
+                <td>在 <code>FilterV3</code> 与 <code>PrepareBlobOutput</code> 之间新增虚函数：<br/>1) <code>FilterV4(..., WideColumnBlobResolver*)</code><br/>2) <code>SupportsFilterV4()</code></td>
+                <td><strong>vtable 偏移改变</strong>：使用 11.8.1 头文件重编译，并在 <code>CqCompactionFilter</code> 中显式覆写 <code>FilterV4</code>、<code>FilterV3</code>、<code>FilterV2</code>、<code>Filter</code>。</td>
+              </tr>
+              <tr>
+                <td><code>rocksdb/compaction_filter.h</code></td>
+                <td><code>Context</code> 仅含 4 个基础字段</td>
+                <td><code>Context</code> 新增 <code>input_start_level</code> 与 <code>TablePropertiesCollection input_table_properties</code></td>
+                <td>更新头文件引用，确保结构体大小与对齐一致。</td>
+              </tr>
+              <tr>
+                <td><code>rocksdb/configurable.h</code></td>
+                <td><code>RegisteredOptions</code> 成员为 <code>void* opt_ptr</code></td>
+                <td><code>RegisteredOptions</code> 成员改为相对偏移 <code>intptr_t opt_offset</code></td>
+                <td>基于 11.8.1 <code>configurable.h</code> 重新编译，保证对象头部布局一致。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>3.2 Compaction 热路径直通优化與多实例句柄隔离</h3>
+          <p>
+            在 RocksDB 11.8.1 的 Compaction 过程中，底层默认调用链为 <code>FilterV4 &rarr; FilterV3 &rarr; FilterV2 &rarr; Filter</code>（共 4 次虚函数分派）。本次改造在 <code>CqCompactionFilter</code> 中将判断逻辑提取为内联函数 <code>ShouldRemove(const rocksdb::Slice&amp;)</code>，并在 <code>FilterV4</code> / <code>FilterV3</code> / <code>FilterV2</code> / <code>Filter</code> 中全部直接调用，消除了热路径上的多层虚函数跳转。
+          </p>
+          <p>
+            同时，针对原实现中 <code>CqCompactionFilterJni</code> 使用全局唯一静态变量 <code>NATIVE_FILTER_PTR</code> 导致同进程多 Broker（如 <code>BrokerContainer</code> 模式或并发单测）互相覆盖 <code>minPhyOffset</code> 甚至引发 Use-After-Free 的缺陷，改造为由每个 <code>ConsumeQueueRocksDBStorage</code> 实例独立持有并管理自身的 <code>nativeFilterPtr</code>：
+          </p>
+<pre><code><span class="diff-comment">// store/src/main/java/org/apache/rocketmq/store/rocksdb/ConsumeQueueRocksDBStorage.java</span>
+<span class="diff-add">private volatile long nativeFilterPtr = 0L;</span>
+
+<span class="diff-comment">// postLoad() 中创建实例专属原生 Filter 并绑定至 ColumnFamilyOptions</span>
+<span class="diff-add">this.nativeFilterPtr = CqCompactionFilterJni.createAndSetFilter(cqCfOptions);</span>
+<span class="diff-add">CqCompactionFilterJni.setMinPhyOffset(this.nativeFilterPtr, messageStore.getMinPhyOffset());</span>
+
+<span class="diff-comment">// preShutdown() 中在 cancelAllBackgroundWork(true) 之后安全销毁当前实例的 Filter</span>
+<span class="diff-add">long ptr = this.nativeFilterPtr;</span>
+<span class="diff-add">if (ptr != 0L) {</span>
+<span class="diff-add">    this.nativeFilterPtr = 0L;</span>
+<span class="diff-add">    CqCompactionFilterJni.destroyNativeFilter(ptr);</span>
+<span class="diff-add">}</span></code></pre>
+
+          <h3>3.3 存量 SST 数据向后兼容</h3>
+          <div class="callout success">
+            <strong>100% 存量数据兼容：</strong> RocksDB 11.8.1 完全向后兼容由 RocksDB 8.4.4 生成的 <code>format_version = 5</code> SST 数据文件、MANIFEST 以及 WAL 日志。<code>MessageStoreConfig.rocksdbFormatVersion</code> 默认保持为 <code>5</code>，支持集群零数据迁移原地升级，同時支持通过配置项按需开启 <code>format_version = 6</code>。
+          </div>
+        </section>
+
+        <!-- Section 4 -->
+        <section id="sec-perf" class="card">
+          <h2>4. 核心性能优化详情</h2>
+
+          <div class="two-col">
+            <div>
+              <h3>4.1 无锁 HyperClockCache 替代 LRUCache</h3>
+              <p>
+                原 <code>RocksDBOptionsFactory</code> 与 <code>ConfigHelper</code> 中所有 ColumnFamily 均使用 <code>new LRUCache(capacity, 8, false)</code>。<code>LRUCache</code> 每次缓存命中都需要获取分片 Mutex 更新链表头，在多消费线程并发拉取 ConsumeQueue 或高并发点查时锁争用严重。
+              </p>
+              <p>
+                RocksDB 11.x 提供了基于无锁原子 CLOCK 算法的 <code>HyperClockCache</code>。本次在工厂类中新增 <code>createBlockCache(capacity, useHyperClockCache)</code>：
+              </p>
+<pre><code>public static Cache createBlockCache(
+    long capacity, boolean useHyperClockCache) {
+    if (useHyperClockCache) {
+        <span class="diff-comment">// estimatedEntryCharge=0 启用 11.x 自动动态槽位计算</span>
+        <span class="diff-add">return new HyperClockCache(capacity, 0L, 8, false);</span>
+    }
+    return new LRUCache(capacity, 8, false);
+}</code></pre>
+            </div>
+
+            <div>
+              <h3>4.2 分区索引/过滤器与 ReadOptions.async_io</h3>
+              <p>
+                针对百万队列（海量 SST 文件）场景，新增 <code>enableRocksdbPartitionedIndexFilters</code> 支持，开启后自动启用两级索引（<code>IndexType.kTwoLevelIndexSearch</code>）与分区过滤器（<code>setPartitionFilters(true)</code>），同时默认开启 <code>setOptimizeFiltersForMemory(true)</code> 减少内存碎片。
+              </p>
+              <p>
+                在 <code>AbstractRocksDBStorage</code>、<code>ConsumeQueueRocksDBStorage</code> 与 <code>ConfigStorage</code> 的 <code>ReadOptions</code> 中默认启用 <code>setAsyncIo(true)</code>，使 RocksDB 在 <code>MultiGet</code> 与范围顺序扫描时自动执行异步预取。
+              </p>
+            </div>
+          </div>
+
+          <h3>4.3 ConfigStorage 点查与范围扫描 DirectSlice 零拷贝优化（含原生内存泄漏修复）</h3>
+          <p>
+            在 <code>broker/config/v2/ConfigStorage.java</code> 中完成了两项关键改造：
+          </p>
+          <ul class="bullet">
+            <li>
+              <strong>点查零拷贝 (<code>get(ByteBuffer key)</code>)</strong>：调用方传入的 <code>key</code> 来自 <code>POOLED_ALLOCATOR</code>（Netty 池化 Direct <code>ByteBuffer</code>）。原实现每次都分配 <code>new byte[key.remaining()]</code> 将 Key 拷贝到堆内再调用 <code>db.get(byte[])</code>。新实现直接从 <code>POOLED_ALLOCATOR</code> 借用 Direct <code>ByteBuffer</code> 调用 <code>db.get(cfHandle, readOptions, keySlice, valueNioBuf)</code>（底层走 JNI <code>getDirect</code>），当 Value 超过初始缓冲区大小时自动按返回长度扩容重试。
+            </li>
+            <li>
+              <strong>范围扫描 <code>DirectSlice</code> 修复与 <code>ManagedRocksIterator</code> 资源闭环</strong>：
+              原代码在 <code>iterate(ByteBuffer beginKey, ByteBuffer endKey)</code> 中因 <code>new DirectSlice(endKey)</code> 单参数构造器在 JNI 层调用了 <code>Slice(const char*)</code>（遇到二进制 <code>0x00</code> 字节会被截断，见 <code>facebook/rocksdb#13098</code>），退化为每次分配 <code>byte[]</code> 并创建 <code>new Slice(buf)</code>，且该 <code>Slice</code> 从未关闭导致 C++ 堆内存泄漏。
+              <br/>
+              新实现采用双参数构造器 <code>new DirectSlice(endSliceBuf, endSliceBuf.remaining())</code> 精确传入二进制长度（零拷贝访问 DirectBuffer 地址），并通过 <code>ManagedRocksIterator</code> 包装返回的迭代器，在 <code>iterator.close()</code> 时按严格顺序依次关闭 <code>delegate</code> &rarr; <code>readOptions</code> &rarr; <code>upperBoundSlice</code>。
+            </li>
+          </ul>
+
+          <h3>4.4 ConsumeQueue 点查 (<code>getCQInKV</code>) 零拷贝优化</h3>
+          <p>
+            <code>RocksDBConsumeQueueTable.getCQInKV()</code> 被广泛用于消息拉取及按时间/物理偏移量二分查找（<code>binarySearchInCQByTime</code> / <code>binarySearchInCQ</code>）。由于每条 CQ Value 固定为 28 字节（<code>CQ_UNIT_SIZE</code>），新实现通过 <code>ThreadLocal&lt;Pair&lt;ByteBuffer, ByteBuffer&gt;&gt;</code> 复用 Direct Key/Value <code>ByteBuffer</code>，直接调用 <code>ConsumeQueueRocksDBStorage.getCQ(ByteBuffer keyBB, ByteBuffer valueBB)</code>（底层为 <code>RocksDB.getDirect</code>），彻底消除了二分查找循环中的堆内 <code>byte[]</code> 分配与复制。
+          </p>
+
+          <h3>4.5 AbstractRocksDBStorage.iterate() 释放顺序修复</h3>
+          <p>
+            在 <code>AbstractRocksDBStorage.iterate()</code> 的 <code>finally</code> 块中，原实现先关闭了 <code>startSlice</code> / <code>endSlice</code> / <code>prefixSlice</code> 和 <code>readOptions</code>，最后才关闭 <code>iterator</code>。由于 C++ <code>RocksIterator</code> 内部持有对 <code>ReadOptions</code> 及其 <code>iterate_lower_bound</code> / <code>iterate_upper_bound</code> <code>Slice</code> 的引用，先释放 <code>Slice</code> 会导致悬挂指针风险。现已修正为先关闭 <code>iterator</code>，再关闭 <code>readOptions</code>，最后释放各个 <code>Slice</code>。
+          </p>
+        </section>
+
+        <!-- Section 5 -->
+        <section id="sec-config" class="card">
+          <h2>5. 新增配置项与默认值</h2>
+          <p>
+            在 <code>org.apache.rocketmq.store.config.MessageStoreConfig</code> 中新增以下可配置参数（均提供 Getter/Setter，可通过 <code>broker.conf</code> 配置）：
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>配置项名称</th>
+                <th>类型</th>
+                <th>默认值</th>
+                <th>说明与调优建议</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>rocksdbFormatVersion</code></td>
+                <td><code>int</code></td>
+                <td><code>5</code></td>
+                <td>SST BlockBasedTable 格式版本。默认 <code>5</code> 保持与 8.4.4 存量数据 100% 双向兼容；新建集群或全量升级后可设为 <code>6</code>。</td>
+              </tr>
+              <tr>
+                <td><code>enableRocksdbHyperClockCache</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>是否启用 RocksDB 11.x 无锁 <code>HyperClockCache</code> 替代 <code>LRUCache</code>。如需回退传统 LRU 可设为 <code>false</code>。</td>
+              </tr>
+              <tr>
+                <td><code>enableRocksdbPartitionedIndexFilters</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>是否对 ConsumeQueue CF 开启两级分区索引 (<code>kTwoLevelIndexSearch</code>) 与分区 Bloom Filter (<code>partitionFilters</code>)。海量队列且内存受限时建议开启。</td>
+              </tr>
+              <tr>
+                <td><code>enableRocksdbAsyncIo</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>是否在 <code>ReadOptions</code> 上启用异步 I/O 预取 (<code>async_io</code>)，提升 <code>MultiGet</code> 与范围扫描性能。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Section 6 -->
+        <section id="sec-files" class="card">
+          <h2>6. 变更文件清单</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>模块</th>
+                <th>文件路径</th>
+                <th>变更行数</th>
+                <th>核心改动说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Root / Build</td>
+                <td><code>pom.xml</code><br/><code>WORKSPACE</code></td>
+                <td><span class="stat-pill stat-add">+2</span> <span class="stat-pill stat-del">-2</span></td>
+                <td>将 Maven 与 Bazel 中的 <code>org.rocksdb:rocksdbjni</code> 版本从 <code>8.4.4</code> 升级至 <code>11.8.1</code>。</td>
+              </tr>
+              <tr>
+                <td>Common</td>
+                <td><code>common/.../config/AbstractRocksDBStorage.java</code></td>
+                <td><span class="stat-pill stat-add">+11</span> <span class="stat-pill stat-del">-7</span></td>
+                <td>支持 <code>ReadOptions.setAsyncIo</code>；修复 <code>iterate()</code> 中 <code>iterator</code>、<code>readOptions</code> 与 <code>Slice</code> 的关闭顺序。</td>
+              </tr>
+              <tr>
+                <td>Common</td>
+                <td><code>common/.../config/ConfigHelper.java</code></td>
+                <td><span class="stat-pill stat-add">+15</span> <span class="stat-pill stat-del">-1</span></td>
+                <td>新增 <code>createBlockCache</code> 支持 <code>HyperClockCache</code>，启用 <code>setOptimizeFiltersForMemory(true)</code>，并将元数据 BlockCache 提升至 32MB。</td>
+              </tr>
+              <tr>
+                <td>Broker</td>
+                <td><code>broker/.../config/v2/ConfigStorage.java</code></td>
+                <td><span class="stat-pill stat-add">+181</span> <span class="stat-pill stat-del">-14</span></td>
+                <td>点查 <code>get(ByteBuffer)</code> 零拷贝改造；<code>iterate()</code> 采用双参数 <code>DirectSlice(ByteBuffer, len)</code> 零拷贝上界并封装 <code>ManagedRocksIterator</code> 自动释放资源。</td>
+              </tr>
+              <tr>
+                <td>Store (Native)</td>
+                <td><code>store/src/main/resources/native/cq_compaction_filter.cpp</code><br/><code>store/src/main/resources/native/libcq_compaction_filter.dylib</code></td>
+                <td><span class="stat-pill stat-add">+56</span> <span class="stat-pill stat-del">-10</span><br/><code>Universal Binary</code></td>
+                <td>适配 RocksDB 11.8.1 <code>CompactionFilter</code> 虚函数表；直通覆写 <code>FilterV4/V3/V2/Filter</code>；新增 <code>getMinPhyOffset0</code> JNI 接口；重编 macOS Universal (<code>arm64</code> + <code>x86_64</code>) 动态库。</td>
+              </tr>
+              <tr>
+                <td>Store</td>
+                <td><code>store/.../rocksdb/CqCompactionFilterJni.java</code><br/><code>store/.../rocksdb/ConsumeQueueRocksDBStorage.java</code></td>
+                <td><span class="stat-pill stat-add">+96</span> <span class="stat-pill stat-del">-18</span></td>
+                <td>支持实例级 <code>nativeFilterPtr</code> 创建、位点更新、查询与销毁；新增 Direct <code>ByteBuffer</code> 重载 <code>getCQ(ByteBuffer, ByteBuffer)</code> 与 <code>getOffset(ByteBuffer, ByteBuffer)</code>。</td>
+              </tr>
+              <tr>
+                <td>Store</td>
+                <td><code>store/.../rocksdb/RocksDBOptionsFactory.java</code><br/><code>store/.../config/MessageStoreConfig.java</code></td>
+                <td><span class="stat-pill stat-add">+83</span> <span class="stat-pill stat-del">-18</span></td>
+                <td>在 CQ / Offset / Pop / Timer / Trans / Index 全 ColumnFamily 引入 <code>HyperClockCache</code>、<code>optimizeFiltersForMemory</code> 及可选分区索引/过滤器配置。</td>
+              </tr>
+              <tr>
+                <td>Store</td>
+                <td><code>store/.../queue/RocksDBConsumeQueueTable.java</code></td>
+                <td><span class="stat-pill stat-add">+21</span> <span class="stat-pill stat-del">-0</span></td>
+                <td><code>getCQInKV</code> 使用线程局部 Direct <code>ByteBuffer</code> 实现 JNI <code>getDirect</code> 零拷贝点查。</td>
+              </tr>
+              <tr>
+                <td>Tests &amp; Docs</td>
+                <td><code>RocksDBOptionsFactoryTest.java</code><br/><code>CqCompactionFilterJniTest.java</code><br/><code>RocksDBConsumeQueueTableTest.java</code><br/><code>docs/en/Native_RocksDB.md</code></td>
+                <td><span class="stat-pill stat-add">+156</span> <span class="stat-pill stat-del">-16</span></td>
+                <td>新增 RocksDB 11.8.1 版本校验、<code>HyperClockCache</code>/分区索引测试、多实例 CompactionFilter 隔离性测试、零拷贝 CQ 点查与二分查找实库测试，并更新英文构建文档。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Section 7 -->
+        <section id="sec-verify" class="card">
+          <h2>7. 测试验证与压测数据</h2>
+          <p>
+            所有变更均已通过 Maven Checkstyle、SpotBugs 静态检查及模块单元测试验证：
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>测试类</th>
+                <th>模块</th>
+                <th>用例数</th>
+                <th>耗时</th>
+                <th>验证重点</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>RocksDBOptionsFactoryTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>5</td>
+                <td>0.44 s</td>
+                <td>验证 <code>RocksDB.rocksdbVersion() == 11.8.1</code>、<code>HyperClockCache</code> 实例创建、<code>format_version=6</code> 与两级分区索引配置。</td>
+              </tr>
+              <tr>
+                <td><code>CqCompactionFilterJniTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>3</td>
+                <td>1.65 s</td>
+                <td>验证 11.8.1 原生 Shim 加载、多 <code>ConsumeQueueRocksDBStorage</code> 实例句柄隔离，以及 100 万条 CQ 记录写入（358ms，279 万条/秒）与 Full Compaction 精确裁剪（147ms）。</td>
+              </tr>
+              <tr>
+                <td><code>RocksDBConsumeQueueTableTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>2</td>
+                <td>0.08 s</td>
+                <td>验证 Direct <code>ByteBuffer</code> 零拷贝 <code>getCQInKV</code> 点查及 <code>binarySearchInCQByTime</code> 二分查找准确性。</td>
+              </tr>
+              <tr>
+                <td><code>RocksDBConsumeQueueOffsetTableTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>3</td>
+                <td>0.35 s</td>
+                <td>验证 Offset CF 迭代、超长 Topic Key 动态扩容与位点恢复。</td>
+              </tr>
+              <tr>
+                <td><code>RocksDBConsumeQueueTest</code> &amp; <code>RocksDBConsumeQueueStoreTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>13</td>
+                <td>48.99 s</td>
+                <td>验证 RocksDB 模式下消息派发、CQ 构建、过期清理、水位线修正与恢复流程。</td>
+              </tr>
+              <tr>
+                <td><code>MessageRocksDBStorageTest</code></td>
+                <td><code>rocketmq-store</code></td>
+                <td>6</td>
+                <td>10.12 s</td>
+                <td>验证 RIP-82 Timer、Transaction、Index 三大 ColumnFamily 在 11.8.1 下的读写、扫描与范围删除。</td>
+              </tr>
+              <tr>
+                <td><code>TopicConfigManagerV2Test</code> / <code>SubscriptionGroupManagerV2Test</code> / <code>ConsumerOffsetManagerV2Test</code></td>
+                <td><code>rocketmq-broker</code></td>
+                <td>10</td>
+                <td>1.95 s</td>
+                <td>验证 <code>ConfigStorage</code> 零拷贝点查与 <code>DirectSlice(ByteBuffer, len)</code> 范围迭代器的正确性及关闭重开恢复能力。</td>
+              </tr>
+              <tr>
+                <td><code>PopConsumerRocksdbStoreTest</code> &amp; <code>RocksdbTopicConfigTransferTest</code></td>
+                <td><code>rocketmq-broker</code></td>
+                <td>8</td>
+                <td>0.62 s</td>
+                <td>验证 Pop 消费记录读写扫描及 JSON 到 RocksDB 配置平滑迁移。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Section 8 -->
+        <section id="sec-risk" class="card">
+          <h2>8. 升级与回滚风险评估</h2>
+          <div class="callout warn">
+            <strong>跨平台原生 Shim 编译提示：</strong> 当前分支已完成 <code>cq_compaction_filter.cpp</code> 源码升级并重新编译了 macOS Universal 动态库（<code>libcq_compaction_filter.dylib</code>，同时包含 <code>arm64</code> 与 <code>x86_64</code>）。在合并发布至 Linux / Windows 生产环境前，需按 <code>docs/en/Native_RocksDB.md</code> 中的说明使用 RocksDB <code>v11.8.1</code> 头文件在 CI 或构建机上同步更新 <code>libcq_compaction_filter.so</code>、<code>libcq_compaction_filter_aarch64.so</code> 与 <code>cq_compaction_filter.dll</code>。
+          </div>
+          <ul class="bullet">
+            <li><strong>平滑回滚能力</strong>：默认保持 <code>rocksdbFormatVersion = 5</code>，生成的 SST 文件与舊版保持兼容；若对 <code>HyperClockCache</code> 或 <code>async_io</code> 有特定环境调优需求，无需重新编译代码，直接通过 <code>broker.conf</code> 将 <code>enableRocksdbHyperClockCache=false</code> 或 <code>enableRocksdbAsyncIo=false</code> 即可热降级回原有行为。</li>
+            <li><strong>监控指标兼容性</strong>：<code>RocksDBStoreMetricsManager</code> 使用的所有 <code>TickerType</code>（如 <code>BLOCK_CACHE_HIT</code>、<code>BLOCK_CACHE_MISS</code>、<code>BYTES_WRITTEN</code>、<code>BYTES_READ</code>、<code>READ_AMP_TOTAL_READ_BYTES</code>）在 RocksDB 11.8.1 中完全兼容，Prometheus/OpenTelemetry 监控面板无需改动。</li>
+          </ul>
+        </section>
+      </main>
+    </div>
+  </div>
+
+</body>
+</html>
