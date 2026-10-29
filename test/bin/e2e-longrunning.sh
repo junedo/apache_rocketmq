@@ -119,7 +119,7 @@ ensure_classpath() {
       -Dmdep.outputFile="${dep_cp_file}" -Dmdep.regenerateFile=true \
       -Djacoco.skip=true -Dspotbugs.skip=true -Dcheckstyle.skip=true -q
   )
-  local full_cp="${REPO_ROOT}/test/target/classes:${REPO_ROOT}/test/target/test-classes"
+  local full_cp="${REPO_ROOT}/test/target/classes"
   for mod in common remoting client store tieredstore srvutil filter rocketmq-proto auth broker namesrv controller proxy tools container; do
     if [ -d "${REPO_ROOT}/${mod}/target/classes" ]; then
       full_cp="${full_cp}:${REPO_ROOT}/${mod}/target/classes"
@@ -138,26 +138,6 @@ rocketmqHome=${WORK_DIR}
 kvConfigPath=${WORK_DIR}/namesrv/kvConfig.json
 configStorePath=${WORK_DIR}/namesrv/namesrv.properties
 listenPort=${NAMESRV_PORT}
-EOF
-
-  cat > "${WORK_DIR}/conf/logback-driver.xml" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-    <appender name="CONSOLE" class="org.apache.rocketmq.logging.ch.qos.logback.core.ConsoleAppender">
-        <encoder class="org.apache.rocketmq.logging.ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-    <logger name="org.apache.rocketmq" level="WARN" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-    </logger>
-    <logger name="org.apache.rocketmq.test.longrunning" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-    </logger>
-    <root level="WARN">
-        <appender-ref ref="CONSOLE"/>
-    </root>
-</configuration>
 EOF
 
   cat > "${WORK_DIR}/conf/logback-driver.xml" <<EOF
