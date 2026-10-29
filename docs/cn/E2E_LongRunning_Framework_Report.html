@@ -1,0 +1,827 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apache RocketMQ E2E 独立进程测试环境与 LongRunning 正确性验证框架设计报告</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-surface: #1e293b;
+      --bg-elevated: #263349;
+      --border: #334155;
+      --text: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --success: #34d399;
+      --success-soft: rgba(52, 211, 153, 0.14);
+      --warning: #fbbf24;
+      --warning-soft: rgba(251, 191, 36, 0.14);
+      --danger: #f87171;
+      --danger-soft: rgba(248, 113, 113, 0.14);
+      --purple: #a78bfa;
+      --purple-soft: rgba(167, 139, 250, 0.14);
+      --code-bg: #0b1120;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --bg-surface: #ffffff;
+        --bg-elevated: #f1f5f9;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --text-secondary: #475569;
+        --accent: #0284c7;
+        --accent-soft: rgba(2, 132, 199, 0.1);
+        --success: #059669;
+        --success-soft: rgba(5, 150, 105, 0.1);
+        --warning: #d97706;
+        --warning-soft: rgba(217, 119, 6, 0.1);
+        --danger: #dc2626;
+        --danger-soft: rgba(220, 38, 38, 0.1);
+        --purple: #7c3aed;
+        --purple-soft: rgba(124, 58, 237, 0.1);
+        --code-bg: #0f172a;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.65;
+      padding-bottom: 64px;
+    }
+
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 28px;
+    }
+
+    header.hero {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(167, 139, 250, 0.08), rgba(52, 211, 153, 0.06));
+      border-bottom: 1px solid var(--border);
+      padding: 44px 0 36px;
+      margin-bottom: 36px;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .badge-accent {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .badge-success {
+      background: var(--success-soft);
+      color: var(--success);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+    }
+
+    .badge-purple {
+      background: var(--purple-soft);
+      color: var(--purple);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+    }
+
+    .badge-warning {
+      background: var(--warning-soft);
+      color: var(--warning);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 15px;
+      max-width: 960px;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .kpi-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+
+    .kpi-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .kpi-value {
+      font-size: 22px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--accent);
+    }
+
+    .kpi-desc {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 250px 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      nav.toc {
+        position: static !important;
+      }
+    }
+
+    nav.toc {
+      position: sticky;
+      top: 24px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+
+    nav.toc h3 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+    }
+
+    nav.toc ul {
+      list-style: none;
+    }
+
+    nav.toc li {
+      margin-bottom: 8px;
+    }
+
+    nav.toc a {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13.5px;
+      display: block;
+      padding: 5px 8px;
+      border-radius: 6px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    nav.toc a:hover {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    section.card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+
+    section.card h2 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    section.card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 22px 0 10px;
+      color: var(--accent);
+    }
+
+    p {
+      margin-bottom: 12px;
+      font-size: 14.5px;
+    }
+
+    ul.bullet, ol.bullet {
+      padding-left: 20px;
+      margin-bottom: 14px;
+      font-size: 14.5px;
+    }
+
+    ul.bullet li, ol.bullet li {
+      margin-bottom: 6px;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: #e2e8f0;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.55;
+      padding: 16px 18px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      margin: 12px 0 16px;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    .hl-comment {
+      color: #94a3b8;
+    }
+
+    .hl-key {
+      color: #38bdf8;
+    }
+
+    .hl-ok {
+      color: #34d399;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 18px;
+      font-size: 13.5px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--bg-elevated);
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    tr:hover td {
+      background: rgba(56, 189, 248, 0.04);
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 14px 18px;
+      border-radius: 0 8px 8px 0;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+
+    .callout.success {
+      border-left-color: var(--success);
+      background: var(--success-soft);
+    }
+
+    .callout.warn {
+      border-left-color: var(--warning);
+      background: var(--warning-soft);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+
+    @media (max-width: 768px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .feature-box {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .feature-box h4 {
+      font-size: 14.5px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    .feature-box p {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 0;
+    }
+
+    .diagram-box {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin: 16px 0;
+      text-align: center;
+      overflow-x: auto;
+    }
+
+    .status-pass {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--success-soft);
+      color: var(--success);
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <div class="container">
+      <div class="badge-row">
+        <span class="badge badge-accent">Branch: feat/e2e-longrunning-framework</span>
+        <span class="badge badge-purple">Independent OS Process Cluster</span>
+        <span class="badge badge-success">5 Workloads &times; 5 Invariants</span>
+        <span class="badge badge-warning">Default vs RocksDB Matrix Verified</span>
+      </div>
+      <h1>Apache RocketMQ E2E 独立进程测试环境与 LongRunning 正确性验证框架报告</h1>
+      <p class="subtitle">
+        面向 RocketMQ 核心存储改造与版本演进，构建了一套「独立 OS 进程级多节点集群编排 + 五类核心消息工作负载并发驱动 + 周期性 Broker 进程重启故障注入 + 五维端到端正确性真理账本」的自动化长稳验证体系。
+      </p>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">端到端消息负载模型</div>
+          <div class="kpi-value">5 Models</div>
+          <div class="kpi-desc">Normal / FIFO / Delay / Transaction / Pop</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">实时正确性不变量</div>
+          <div class="kpi-value">5 Invariants</div>
+          <div class="kpi-desc">0 丢失 / 0 篡改 / 0 乱序 / 0 回滚泄露 / 0 早投</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">存储引擎矩阵覆盖</div>
+          <div class="kpi-value">Default &amp; RocksDB</div>
+          <div class="kpi-desc">支持单引擎压测与双引擎 Matrix 对照验证</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">实测双引擎 + Chaos 通过率</div>
+          <div class="kpi-value">100% PASS</div>
+          <div class="kpi-desc">累计校验 3,731 条有效消息，0 违规项</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="layout">
+      <nav class="toc">
+        <h3>报告目录</h3>
+        <ul>
+          <li><a href="#sec-purpose">1. 设计目标与解决痛点</a></li>
+          <li><a href="#sec-arch">2. 整体系统架构</a></li>
+          <li><a href="#sec-ledger">3. 五维正确性真理账本</a></li>
+          <li><a href="#sec-workloads">4. 五大负载与故障注入</a></li>
+          <li><a href="#sec-matrix">5. 双存储引擎矩阵与实测</a></li>
+          <li><a href="#sec-cli">6. 执行脚本与操作指南</a></li>
+          <li><a href="#sec-files">7. 代码与文件清单</a></li>
+        </ul>
+      </nav>
+
+      <main>
+        <!-- Section 1 -->
+        <section id="sec-purpose" class="card">
+          <h2>1. 设计目标与解决痛点</h2>
+          <p>
+            在对 RocketMQ 底层组件（如 RocksDB 版本升级、ConsumeQueue 存储结构、Timer/Transaction 引擎、元数据 ConfigStorage V2 等）进行改动时，单测与短生命周期集成测试往往无法暴露以下深水区问题：
+          </p>
+          <ul class="bullet">
+            <li><strong>跨进程边界与真实启动链路缺失</strong>：嵌入式测试共享同一 JVM 内存与类加载器，无法真实模拟 OS 进程级信号（<code>SIGTERM</code> / <code>SIGKILL</code>）下 PageCache / RocksDB WAL 刷盘与冷启动恢复。</li>
+            <li><strong>混合负载耦合效应</strong>：普通消息、严格顺序消息、定时时间轮/RocksDB Timer、分布式事务半消息回查、Pop 消费同时读写时，对共享存储（CommitLog 与 RocksDB 多 ColumnFamily）产生的并发干扰。</li>
+            <li><strong>只压吞吐、不验内容</strong>：传统 Benchmark 仅统计 QPS/RT Counter，无法发现小概率的「丢 1 条消息」、「Payload 字节错位」、「局部乱序」或「已回滚事务半消息被误投递」。</li>
+          </ul>
+          <div class="callout success">
+            <strong>核心设计理念：</strong> 将「独立 OS 进程集群管理」、「多模型混合负载生成」、「周期性进程级故障注入」与「单消息粒度真理账本（Ground-Truth Ledger）」解耦并闭环，任何一处违反端到端不变量立即判定失败并输出结构化诊断报告。
+          </div>
+        </section>
+
+        <!-- Section 2 -->
+        <section id="sec-arch" class="card">
+          <h2>2. 整体系统架构</h2>
+          <div class="diagram-box">
+            <svg viewBox="0 0 900 420" width="100%" height="auto" xmlns="http://www.w3.org/2000/svg" style="max-width: 860px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;">
+              <defs>
+                <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+                </marker>
+                <marker id="arr-warn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#fbbf24" />
+                </marker>
+              </defs>
+
+              <!-- Top Orchestrator -->
+              <rect x="20" y="14" width="860" height="58" rx="10" fill="rgba(56, 189, 248, 0.1)" stroke="#38bdf8" stroke-width="1.5"/>
+              <text x="450" y="38" fill="#38bdf8" font-size="14" font-weight="bold" text-anchor="middle">test/bin/e2e-longrunning.sh (独立进程集群编排与 Matrix 矩阵执行器)</text>
+              <text x="450" y="57" fill="#94a3b8" font-size="11.5" text-anchor="middle">支持 start-cluster | stop-cluster | restart-broker (graceful/kill) | status | run (--profile default|rocksdb|matrix)</text>
+
+              <!-- Left: Independent RocketMQ Cluster Processes -->
+              <rect x="20" y="96" width="380" height="304" rx="10" fill="rgba(52, 211, 153, 0.07)" stroke="#34d399" stroke-width="1.5"/>
+              <text x="36" y="122" fill="#34d399" font-size="13.5" font-weight="bold">独立 OS 进程 RocketMQ 集群环境</text>
+
+              <rect x="40" y="138" width="340" height="48" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="210" y="160" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">NamesrvStartup Process (独立 JVM)</text>
+              <text x="210" y="176" fill="#94a3b8" font-size="10.5" text-anchor="middle">路由注册中心 | 监听独立端口 19876</text>
+
+              <rect x="40" y="200" width="340" height="82" rx="6" fill="#1e293b" stroke="#34d399"/>
+              <text x="210" y="222" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">BrokerStartup Node-0 Process (独立 JVM)</text>
+              <text x="210" y="242" fill="#94a3b8" font-size="10.5" text-anchor="middle">Profile A (default): File CQ + Config V1 + File Timer/Tx</text>
+              <text x="210" y="260" fill="#38bdf8" font-size="10.5" text-anchor="middle">Profile B (rocksdb): RocksDB CQ + Config V2 + RocksDB Timer/Tx/Index</text>
+
+              <rect x="40" y="296" width="340" height="82" rx="6" fill="#1e293b" stroke="#34d399"/>
+              <text x="210" y="318" fill="#f1f5f9" font-size="12" font-weight="bold" text-anchor="middle">BrokerStartup Node-1 Process (独立 JVM)</text>
+              <text x="210" y="338" fill="#94a3b8" font-size="10.5" text-anchor="middle">多节点分布式队列负载均衡与故障转移</text>
+              <text x="210" y="356" fill="#fbbf24" font-size="10.5" text-anchor="middle">支持运行期滚动重启与 Checkpoint/WAL 截断恢复</text>
+
+              <!-- Right: LongRunningTestDriver Process -->
+              <rect x="440" y="96" width="440" height="304" rx="10" fill="rgba(167, 139, 250, 0.08)" stroke="#a78bfa" stroke-width="1.5"/>
+              <text x="456" y="122" fill="#a78bfa" font-size="13.5" font-weight="bold">LongRunningTestDriver (独立验证客户端 JVM)</text>
+
+              <rect x="458" y="138" width="200" height="162" rx="6" fill="#1e293b" stroke="#475569"/>
+              <text x="558" y="160" fill="#38bdf8" font-size="12" font-weight="bold" text-anchor="middle">5 并发工作负载生成器</text>
+              <text x="472" y="182" fill="#f1f5f9" font-size="11">&bull; NormalMessageWorkload</text>
+              <text x="472" y="204" fill="#f1f5f9" font-size="11">&bull; FifoOrderedWorkload</text>
+              <text x="472" y="226" fill="#f1f5f9" font-size="11">&bull; DelayTimerWorkload</text>
+              <text x="472" y="248" fill="#f1f5f9" font-size="11">&bull; TransactionWorkload</text>
+              <text x="472" y="270" fill="#f1f5f9" font-size="11">&bull; PopMessageWorkload</text>
+
+              <rect x="670" y="138" width="192" height="162" rx="6" fill="#1e293b" stroke="#38bdf8"/>
+              <text x="766" y="160" fill="#34d399" font-size="12" font-weight="bold" text-anchor="middle">CorrectnessLedger</text>
+              <text x="682" y="182" fill="#f1f5f9" font-size="10.5">&check; 零消息丢失核对</text>
+              <text x="682" y="204" fill="#f1f5f9" font-size="10.5">&check; CRC32 字节完整性</text>
+              <text x="682" y="226" fill="#f1f5f9" font-size="10.5">&check; ShardingKey 顺序连续性</text>
+              <text x="682" y="248" fill="#f1f5f9" font-size="10.5">&check; 事务 Rollback 零泄露</text>
+              <text x="682" y="270" fill="#f1f5f9" font-size="10.5">&check; Timer 投递时间窗口</text>
+              <text x="682" y="290" fill="#94a3b8" font-size="10">&rarr; 输出 JSON 验证报告</text>
+
+              <rect x="458" y="314" width="404" height="64" rx="6" fill="#1e293b" stroke="#fbbf24"/>
+              <text x="660" y="338" fill="#fbbf24" font-size="12" font-weight="bold" text-anchor="middle">ClusterChaosController (周期性故障注入控制器)</text>
+              <text x="660" y="358" fill="#94a3b8" font-size="10.5" text-anchor="middle">按周期触发 Broker 进程 SIGTERM / SIGKILL 重启并探活集群路由恢复</text>
+
+              <!-- Connections -->
+              <line x1="210" y1="72" x2="210" y2="96" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+              <line x1="660" y1="72" x2="660" y2="96" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+              <line x1="458" y1="220" x2="380" y2="240" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+              <line x1="458" y1="346" x2="380" y2="346" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-warn)"/>
+            </svg>
+          </div>
+        </section>
+
+        <!-- Section 3 -->
+        <section id="sec-ledger" class="card">
+          <h2>3. 五维正确性真理账本 (CorrectnessLedger)</h2>
+          <p>
+            <code>CorrectnessLedger</code> 是整个 LongRunning 框架的核心裁判器。每条由框架生成的消息在发送前均注入自包含的校验属性头与确定性二进制载荷：
+          </p>
+<pre><code><span class="hl-comment">// 消息自描述属性头 (User Properties)</span>
+<span class="hl-key">LR_RUN_ID</span>              = "lr-ce7decc6"                  <span class="hl-comment">// 批次唯一标识，隔离不同运行实例</span>
+<span class="hl-key">LR_MSG_KEY</span>             = "lr-ce7decc6-FIFO-fifo-key-2-18" <span class="hl-comment">// 全局唯一消息主键</span>
+<span class="hl-key">LR_WORKLOAD</span>            = "NORMAL | FIFO | DELAY | TRANSACTION | POP"
+<span class="hl-key">LR_SHARD_KEY</span>           = "fifo-key-2"                   <span class="hl-comment">// 分区顺序键</span>
+<span class="hl-key">LR_SEQ_ID</span>              = "18"                           <span class="hl-comment">// 单调递增序列号 (0, 1, 2, ...)</span>
+<span class="hl-key">LR_CRC32</span>               = "3849104721"                   <span class="hl-comment">// 发送端计算的 Body CRC32 校验和</span>
+<span class="hl-key">LR_SEND_TS</span>             = "1793278605120"                <span class="hl-comment">// 发送时间戳 (ms)</span>
+<span class="hl-key">LR_EXPECTED_DELIVER_TS</span> = "1793278607120"                <span class="hl-comment">// 期望定时触发时间戳 (ms)</span></code></pre>
+
+          <table>
+            <thead>
+              <tr>
+                <th>校验维度 (Invariant)</th>
+                <th>统计指标字段</th>
+                <th>核对机制与判定准则</th>
+                <th>通过标准</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>1. 零消息丢失<br/>(Zero Data Loss)</strong></td>
+                <td><code>unconsumedCount</code></td>
+                <td>所有成功发送的普通/顺序/定时/Pop 消息以及状态为 <code>COMMITTED</code> 的事务消息均记入期望集合，排空阶段结束后逐条核对是否已被消费确认。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+              <tr>
+                <td><strong>2. 零数据损坏<br/>(Zero Corruption)</strong></td>
+                <td><code>crcCorruptionCount</code></td>
+                <td>消费端收到 <code>MessageExt</code> 后对 <code>getBody()</code> 重新计算 <code>CRC32</code>，并与消息属性中的 <code>LR_CRC32</code> 比对，任何 1 字节翻转或截断立即告警。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+              <tr>
+                <td><strong>3. 严格 FIFO 顺序与连续性<br/>(Strict FIFO Order)</strong></td>
+                <td><code>fifoOrderViolationCount</code><br/><code>fifoGapViolationCount</code></td>
+                <td>按每个 <code>shardingKey</code> 独立维护消费水位线：实时校验到达序列是否满足 <code>seqId == prev + 1</code>（允许故障重启下的幂等重投 <code>seqId &lt;= prev</code>），并在收尾阶段验证 <code>[0..maxSentSeq]</code> 无任何空洞缺失。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+              <tr>
+                <td><strong>4. 事务回滚隔离性<br/>(Tx Rollback Isolation)</strong></td>
+                <td><code>rollbackLeakCount</code></td>
+                <td>凡是通过本地事务直接返回 <code>ROLLBACK_MESSAGE</code> 或通过 Broker 回查返回 <code>ROLLBACK_MESSAGE</code> 的半消息，若被任何消费者收到，立即记为事务隔离泄露。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+              <tr>
+                <td><strong>5. 定时触发准确性<br/>(Timer Accuracy)</strong></td>
+                <td><code>prematureTimerDeliveryCount</code></td>
+                <td>核对 <code>DELAY</code> 消息实际消费时间 <code>now + timerToleranceMs &gt;= expectedDeliverTimestamp</code>，严禁定时消息未到期提前投递。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Section 4 -->
+        <section id="sec-workloads" class="card">
+          <h2>4. 五大并发工作负载与故障注入设计</h2>
+          <div class="grid-3">
+            <div class="feature-box">
+              <h4>NormalMessageWorkload</h4>
+              <p>使用 <code>DefaultMQProducer</code> 与 <code>MessageListenerConcurrently</code> 并发收发普通消息，验证基础 CommitLog 与 ConsumeQueue 读写链路。</p>
+            </div>
+            <div class="feature-box">
+              <h4>FifoOrderedWorkload</h4>
+              <p>使用固定队列选择器（Pinned Queue Selector）绑定多组 <code>shardingKey</code> 与 <code>MessageListenerOrderly</code>，验证 Broker 队列锁与顺序消费位点推进。</p>
+            </div>
+            <div class="feature-box">
+              <h4>DelayTimerWorkload</h4>
+              <p>通过 <code>msg.setDeliverTimeMs()</code> 持续发送定时消息，同时覆盖时间轮（TimerWheel）与 RocksDB Timer（RIP-82）存储引擎。</p>
+            </div>
+            <div class="feature-box">
+              <h4>TransactionWorkload</h4>
+              <p>按固定比例构造三类事务分支：<strong>70% 本地直接 Commit</strong>、<strong>20% 本地直接 Rollback</strong>、<strong>10% 返回 UNKNOW 触发 Broker 异步回查 Commit/Rollback</strong>。</p>
+            </div>
+            <div class="feature-box">
+              <h4>PopMessageWorkload</h4>
+              <p>通过 <code>RMQPopClient</code> 轮询集群各 Broker 节点执行 <code>popMessageAsync</code> 并对每条消息调用 <code>ackMessageAsync</code>，验证 Pop 飞行状态与 RocksDB Pop 存储。</p>
+            </div>
+            <div class="feature-box">
+              <h4>ClusterChaosController</h4>
+              <p>按配置周期（<code>--chaos-interval</code>）轮流对独立 Broker 进程执行优雅重启（<code>SIGTERM</code>）或强制杀进程（<code>SIGKILL</code>），并校验集群路由在超时窗口内完整恢复。</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section 5 -->
+        <section id="sec-matrix" class="card">
+          <h2>5. 双存储引擎矩阵对比与实测数据</h2>
+          <p>
+            <code>test/bin/e2e-longrunning.sh</code> 支持通过 <code>--profile matrix</code> 自动依次拉起两套完全隔离的独立进程集群（分别配置为 <code>default</code> 与 <code>rocksdb</code>），运行相同的五类混合工作负载与 Broker 进程重启故障注入：
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>检验项 / 实测指标</th>
+                <th>Profile A: <code>default</code> (传统文件存储)</th>
+                <th>Profile B: <code>rocksdb</code> (全栈 RocksDB 存储)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Broker 核心存储配置</strong></td>
+                <td>
+                  <code>storeType=default</code><br/>
+                  <code>configManagerVersion=v1</code><br/>
+                  <code>timerRocksDBEnable=false</code><br/>
+                  <code>transRocksDBEnable=false</code>
+                </td>
+                <td>
+                  <code>storeType=defaultRocksDB</code><br/>
+                  <code>configManagerVersion=v2</code><br/>
+                  <code>timerRocksDBEnable=true</code><br/>
+                  <code>transRocksDBEnable=true</code><br/>
+                  <code>indexRocksDBEnable=true</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>期望投递总消息数 (Expected Delivered)</strong></td>
+                <td><code>1,865</code> 条</td>
+                <td><code>1,866</code> 条</td>
+              </tr>
+              <tr>
+                <td><strong>唯一成功消费数 (Unique Consumed)</strong></td>
+                <td><code>1,865</code> 条</td>
+                <td><code>1,866</code> 条</td>
+              </tr>
+              <tr>
+                <td><strong>各负载分布 (Normal / Pop / Delay / FIFO / Tx)</strong></td>
+                <td><code>684 / 358 / 358 / 284 / 181</code></td>
+                <td><code>684 / 359 / 358 / 283 / 182</code></td>
+              </tr>
+              <tr>
+                <td><strong>事务回滚拦截数 (Tx Rolled Back)</strong></td>
+                <td><code>59</code> 条 (0 泄露)</td>
+                <td><code>59</code> 条 (0 泄露)</td>
+              </tr>
+              <tr>
+                <td><strong>Broker 进程 Chaos 重启恢复</strong></td>
+                <td><code>1 / 1</code> 成功恢复</td>
+                <td><code>1 / 1</code> 成功恢复</td>
+              </tr>
+              <tr>
+                <td><strong>端到端延迟 (P50 / P95)</strong></td>
+                <td><code>3 ms / 1,079 ms</code></td>
+                <td><code>2 ms / 1,094 ms</code></td>
+              </tr>
+              <tr>
+                <td><strong>五维不变量违规数 (丢失/CRC/乱序/泄露/早投)</strong></td>
+                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
+                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Section 6 -->
+        <section id="sec-cli" class="card">
+          <h2>6. 执行脚本与操作指南</h2>
+
+          <h3>6.1 一键运行双存储引擎 Matrix 端到端长稳验证</h3>
+<pre><code>bash test/bin/e2e-longrunning.sh run \
+  --profile matrix \
+  --duration 60 \
+  --drain-timeout 30 \
+  --chaos-interval 15 \
+  --chaos-mode graceful \
+  --send-interval-ms 25 \
+  --work-dir /tmp/rmq-e2e-longrunning</code></pre>
+
+          <h3>6.2 单独运行 RocksDB 存储引擎 + 混合故障注入 (SIGTERM + SIGKILL)</h3>
+<pre><code>bash test/bin/e2e-longrunning.sh run \
+  --profile rocksdb \
+  --duration 120 \
+  --chaos-interval 20 \
+  --chaos-mode mixed \
+  --work-dir /tmp/rmq-e2e-rocksdb</code></pre>
+
+          <h3>6.3 独立进程集群手工启停与故障演练</h3>
+<pre><code><span class="hl-comment"># 1. 启动独立 NameServer + 2 节点 Broker 进程</span>
+bash test/bin/e2e-longrunning.sh start-cluster --profile rocksdb --work-dir /tmp/rmq-cluster
+
+<span class="hl-comment"># 2. 查看集群各节点 OS 进程存活状态</span>
+bash test/bin/e2e-longrunning.sh status --work-dir /tmp/rmq-cluster
+
+<span class="hl-comment"># 3. 手动重启指定 Broker 进程 (graceful 或 kill)</span>
+bash test/bin/e2e-longrunning.sh restart-broker --work-dir /tmp/rmq-cluster --broker-id 0 --mode graceful
+
+<span class="hl-comment"># 4. 停止并清理集群进程</span>
+bash test/bin/e2e-longrunning.sh stop-cluster --work-dir /tmp/rmq-cluster</code></pre>
+        </section>
+
+        <!-- Section 7 -->
+        <section id="sec-files" class="card">
+          <h2>7. 代码与文件清单</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>分类</th>
+                <th>文件路径</th>
+                <th>核心职责说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>集群编排脚本</strong></td>
+                <td><code>test/bin/e2e-longrunning.sh</code></td>
+                <td>独立进程集群生命周期管理（NameServer + 多 Broker）、配置自动生成、单节点故障重启及 <code>default / rocksdb / matrix</code> 驱动执行。</td>
+              </tr>
+              <tr>
+                <td><strong>驱动主入口</strong></td>
+                <td><code>test/.../longrunning/LongRunningTestDriver.java</code></td>
+                <td>独立验证进程 CLI 入口，负责集群探活、Topic/订阅组初始化、Workload 编排、Chaos 调度、排空等待与报告输出。</td>
+              </tr>
+              <tr>
+                <td><strong>配置模型</strong></td>
+                <td><code>test/.../longrunning/config/LongRunningConfig.java</code><br/><code>test/.../longrunning/config/StorageProfile.java</code></td>
+                <td>CLI 参数解析、工作负载开关、发送频率、排空超时、Chaos 间隔及存储引擎 Profile 定义。</td>
+              </tr>
+              <tr>
+                <td><strong>真理账本与报告</strong></td>
+                <td><code>test/.../longrunning/ledger/CorrectnessLedger.java</code><br/><code>test/.../longrunning/ledger/VerificationReport.java</code></td>
+                <td>线程安全的五维不变量实时核对器、延迟分位统计（P50/P95/P99/Max）与 JSON 报告结构定义。</td>
+              </tr>
+              <tr>
+                <td><strong>五大工作负载与 Chaos</strong></td>
+                <td>
+                  <code>test/.../longrunning/workload/Workload.java</code><br/>
+                  <code>test/.../longrunning/workload/NormalMessageWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/FifoOrderedWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/DelayTimerWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/TransactionWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/PopMessageWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/ClusterChaosController.java</code>
+                </td>
+                <td>五类核心消息收发负载实现以及独立 Broker 进程周期性故障注入与恢复探活控制器。</td>
+              </tr>
+              <tr>
+                <td><strong>单元测试与文档</strong></td>
+                <td>
+                  <code>test/src/test/.../longrunning/CorrectnessLedgerTest.java</code><br/>
+                  <code>docs/cn/E2E_LongRunning_Framework.md</code><br/>
+                  <code>docs/cn/E2E_LongRunning_Framework_Report.html</code>
+                </td>
+                <td>真理账本正向/反向异常检测单测、Markdown 使用说明与 HTML 可视化评审报告。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </div>
+
+</body>
+</html>
