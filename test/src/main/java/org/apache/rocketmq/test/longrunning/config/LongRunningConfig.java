@@ -44,6 +44,10 @@ public class LongRunningConfig {
     private boolean enableDelayWorkload = true;
     private boolean enableTransactionWorkload = true;
     private boolean enablePopWorkload = true;
+    private boolean enableBatchWorkload = true;
+    private boolean enableFilterWorkload = true;
+    private boolean enableRetryPullWorkload = true;
+    private boolean enableE2EScenarioSuite = true;
 
     public static LongRunningConfig fromArgs(String[] args) {
         LongRunningConfig cfg = new LongRunningConfig();
@@ -106,6 +110,10 @@ public class LongRunningConfig {
                     break;
                 case "--payloadSize":
                     cfg.setPayloadSizeBytes(Integer.parseInt(next));
+                    i++;
+                    break;
+                case "--enableE2ESuite":
+                    cfg.setEnableE2EScenarioSuite(Boolean.parseBoolean(next));
                     i++;
                     break;
                 default:
@@ -281,5 +289,37 @@ public class LongRunningConfig {
 
     public void setEnablePopWorkload(boolean enablePopWorkload) {
         this.enablePopWorkload = enablePopWorkload;
+    }
+
+    public boolean isEnableBatchWorkload() {
+        return enableBatchWorkload;
+    }
+
+    public void setEnableBatchWorkload(boolean enableBatchWorkload) {
+        this.enableBatchWorkload = enableBatchWorkload;
+    }
+
+    public boolean isEnableFilterWorkload() {
+        return enableFilterWorkload;
+    }
+
+    public void setEnableFilterWorkload(boolean enableFilterWorkload) {
+        this.enableFilterWorkload = enableFilterWorkload;
+    }
+
+    public boolean isEnableRetryPullWorkload() {
+        return enableRetryPullWorkload;
+    }
+
+    public void setEnableRetryPullWorkload(boolean enableRetryPullWorkload) {
+        this.enableRetryPullWorkload = enableRetryPullWorkload;
+    }
+
+    public boolean isEnableE2EScenarioSuite() {
+        return enableE2EScenarioSuite;
+    }
+
+    public void setEnableE2EScenarioSuite(boolean enableE2EScenarioSuite) {
+        this.enableE2EScenarioSuite = enableE2EScenarioSuite;
     }
 }

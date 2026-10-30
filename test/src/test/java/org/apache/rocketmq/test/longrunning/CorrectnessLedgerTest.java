@@ -60,15 +60,27 @@ public class CorrectnessLedgerTest {
         ledger.registerTxPrepared(txRollback);
         ledger.markTxRolledBack(txRollback.getUserProperty(CorrectnessLedger.PROP_MSG_KEY));
 
+        // 4. Filtered-out messages (should not be delivered)
+        Message filteredMsg = ledger.buildTrackedMessage("T_FILTER", "Aa", "FILTER", "f-0", 0, 0L);
+        ledger.registerFilteredOutSent(filteredMsg);
+
+        // 5. E2E suite case results
+        ledger.recordE2ECaseResult("01_Normal_SyncSendAndConsume", true, 25L, "OK");
+
         VerificationReport report = ledger.buildReport(1000L);
         Assert.assertTrue(report.isPassed());
         Assert.assertEquals(16L, report.getTotalExpectedDelivered());
         Assert.assertEquals(16L, report.getTotalUniqueConsumed());
         Assert.assertEquals(1L, report.getTotalRolledBack());
+        Assert.assertEquals(1L, report.getTotalFilteredOut());
+        Assert.assertEquals(1, report.getE2eCasesTotal());
+        Assert.assertEquals(1, report.getE2eCasesPassed());
+        Assert.assertEquals(0, report.getE2eCasesFailed());
         Assert.assertEquals(0L, report.getUnconsumedCount());
         Assert.assertEquals(0L, report.getCrcCorruptionCount());
         Assert.assertEquals(0L, report.getFifoOrderViolationCount());
         Assert.assertEquals(0L, report.getRollbackLeakCount());
+        Assert.assertEquals(0L, report.getFilterLeakCount());
     }
 
     @Test
@@ -97,10 +109,16 @@ public class CorrectnessLedgerTest {
         ledger.registerNonTxSent(fifo1);
         ledger.recordConsumed(toMessageExt(fifo1));
 
+        // 4. Filter leak (message registered as FILTERED_OUT is delivered)
+        Message leakedFilter = ledger.buildTrackedMessage("T_FILTER", "Aa", "FILTER", "f-0", 0, 0L);
+        ledger.registerFilteredOutSent(leakedFilter);
+        ledger.recordConsumed(toMessageExt(leakedFilter));
+
         VerificationReport report = ledger.buildReport(500L);
         Assert.assertFalse(report.isPassed());
         Assert.assertEquals(1L, report.getCrcCorruptionCount());
         Assert.assertEquals(1L, report.getRollbackLeakCount());
+        Assert.assertEquals(1L, report.getFilterLeakCount());
         Assert.assertEquals(1L, report.getFifoOrderViolationCount());
         Assert.assertEquals(1L, report.getFifoGapViolationCount());
         Assert.assertEquals(1L, report.getUnconsumedCount());

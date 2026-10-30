@@ -37,11 +37,15 @@ import org.apache.rocketmq.remoting.protocol.subscription.SubscriptionGroupConfi
 import org.apache.rocketmq.test.longrunning.config.LongRunningConfig;
 import org.apache.rocketmq.test.longrunning.ledger.CorrectnessLedger;
 import org.apache.rocketmq.test.longrunning.ledger.VerificationReport;
+import org.apache.rocketmq.test.longrunning.suite.E2EScenarioSuite;
+import org.apache.rocketmq.test.longrunning.workload.BatchMessageWorkload;
 import org.apache.rocketmq.test.longrunning.workload.ClusterChaosController;
 import org.apache.rocketmq.test.longrunning.workload.DelayTimerWorkload;
 import org.apache.rocketmq.test.longrunning.workload.FifoOrderedWorkload;
 import org.apache.rocketmq.test.longrunning.workload.NormalMessageWorkload;
 import org.apache.rocketmq.test.longrunning.workload.PopMessageWorkload;
+import org.apache.rocketmq.test.longrunning.workload.RetryAndLitePullWorkload;
+import org.apache.rocketmq.test.longrunning.workload.TagAndSqlFilterWorkload;
 import org.apache.rocketmq.test.longrunning.workload.TransactionWorkload;
 import org.apache.rocketmq.test.longrunning.workload.Workload;
 import org.apache.rocketmq.tools.admin.DefaultMQAdminExt;
@@ -72,37 +76,44 @@ public class LongRunningTestDriver {
             log.info("Cluster [{}] is ready on NameServer [{}] with {} broker(s), profile={}",
                 config.getClusterName(), config.getNamesrvAddr(), brokerCount, config.getProfile().getName());
 
-            registerWorkloads(adminExt);
-
-            for (Workload workload : workloads) {
-                workload.start();
+            if (config.isEnableE2EScenarioSuite()) {
+                E2EScenarioSuite suite = new E2EScenarioSuite(config, ledger, adminExt);
+                suite.runAllScenarios();
             }
 
-            chaosController = new ClusterChaosController(config, ledger, adminExt, brokerCount);
-            chaosController.start();
+            if (config.getDurationSeconds() > 0) {
+                registerWorkloads(adminExt);
 
-            long endRunTimeMs = System.currentTimeMillis() + config.getDurationSeconds() * 1000L;
-            while (System.currentTimeMillis() < endRunTimeMs) {
-                long remainingSec = Math.max(0L, (endRunTimeMs - System.currentTimeMillis()) / 1000L);
-                log.info("[Progress runId={} profile={} remaining={}s] pending={}",
-                    config.getRunId(), config.getProfile().getName(), remainingSec, ledger.getPendingCount());
-                Thread.sleep(Math.min(2000L, Math.max(200L, endRunTimeMs - System.currentTimeMillis())));
+                for (Workload workload : workloads) {
+                    workload.start();
+                }
+
+                chaosController = new ClusterChaosController(config, ledger, adminExt, brokerCount);
+                chaosController.start();
+
+                long endRunTimeMs = System.currentTimeMillis() + config.getDurationSeconds() * 1000L;
+                while (System.currentTimeMillis() < endRunTimeMs) {
+                    long remainingSec = Math.max(0L, (endRunTimeMs - System.currentTimeMillis()) / 1000L);
+                    log.info("[Progress runId={} profile={} remaining={}s] pending={}",
+                        config.getRunId(), config.getProfile().getName(), remainingSec, ledger.getPendingCount());
+                    Thread.sleep(Math.min(2000L, Math.max(200L, endRunTimeMs - System.currentTimeMillis())));
+                }
+
+                // 1. Stop chaos fault injection first and ensure all brokers are back online
+                chaosController.stop();
+                waitForClusterReady(adminExt, 30000L);
+
+                // 2. Stop all producers
+                log.info("Stopping producers and entering drain phase (timeout={}s)...", config.getDrainTimeoutSeconds());
+                for (Workload workload : workloads) {
+                    workload.stopProducing();
+                }
+
+                // 3. Wait for all expected messages (including delay & transaction check-backs) to drain
+                long drainWaitMs = Math.max(config.getDrainTimeoutSeconds() * 1000L, config.getDelayMessageMs() + 10000L);
+                boolean drained = ledger.awaitDrain(drainWaitMs);
+                log.info("Drain completed: drained={}, remainingPending={}", drained, ledger.getPendingCount());
             }
-
-            // 1. Stop chaos fault injection first and ensure all brokers are back online
-            chaosController.stop();
-            waitForClusterReady(adminExt, 30000L);
-
-            // 2. Stop all producers
-            log.info("Stopping producers and entering drain phase (timeout={}s)...", config.getDrainTimeoutSeconds());
-            for (Workload workload : workloads) {
-                workload.stopProducing();
-            }
-
-            // 3. Wait for all expected messages (including delay & transaction check-backs) to drain
-            long drainWaitMs = Math.max(config.getDrainTimeoutSeconds() * 1000L, config.getDelayMessageMs() + 10000L);
-            boolean drained = ledger.awaitDrain(drainWaitMs);
-            log.info("Drain completed: drained={}, remainingPending={}", drained, ledger.getPendingCount());
         } finally {
             if (chaosController != null) {
                 chaosController.stop();
@@ -149,6 +160,21 @@ public class LongRunningTestDriver {
             PopMessageWorkload w = new PopMessageWorkload(config, ledger);
             createTopicOnCluster(adminExt, w.topicName(), config.getQueueNums(), new HashMap<>());
             createSubscriptionGroupOnCluster(adminExt, w.getConsumerGroup());
+            workloads.add(w);
+        }
+        if (config.isEnableBatchWorkload()) {
+            BatchMessageWorkload w = new BatchMessageWorkload(config, ledger);
+            createTopicOnCluster(adminExt, w.topicName(), config.getQueueNums(), new HashMap<>());
+            workloads.add(w);
+        }
+        if (config.isEnableFilterWorkload()) {
+            TagAndSqlFilterWorkload w = new TagAndSqlFilterWorkload(config, ledger);
+            createTopicOnCluster(adminExt, w.topicName(), config.getQueueNums(), new HashMap<>());
+            workloads.add(w);
+        }
+        if (config.isEnableRetryPullWorkload()) {
+            RetryAndLitePullWorkload w = new RetryAndLitePullWorkload(config, ledger);
+            createTopicOnCluster(adminExt, w.topicName(), config.getQueueNums(), new HashMap<>());
             workloads.add(w);
         }
     }
@@ -219,15 +245,19 @@ public class LongRunningTestDriver {
         log.info("E2E LongRunning Verification Report [runId={}, profile={}, passed={}]",
             report.getRunId(), report.getProfile(), report.isPassed());
         log.info("  Duration              : {} ms", report.getDurationMs());
+        log.info("  E2E Suite Cases       : {}/{} passed (failed={})",
+            report.getE2eCasesPassed(), report.getE2eCasesTotal(), report.getE2eCasesFailed());
         log.info("  Expected Delivered    : {}", report.getTotalExpectedDelivered());
         log.info("  Unique Consumed       : {}", report.getTotalUniqueConsumed());
         log.info("  Duplicate Redeliveries: {}", report.getTotalDuplicateConsumed());
         log.info("  Tx Rolled Back        : {}", report.getTotalRolledBack());
+        log.info("  Filtered Out Msgs     : {}", report.getTotalFilteredOut());
         log.info("  Unconsumed (Lost)     : {}", report.getUnconsumedCount());
         log.info("  CRC32 Corruptions     : {}", report.getCrcCorruptionCount());
         log.info("  FIFO Order Violations : {}", report.getFifoOrderViolationCount());
         log.info("  FIFO Sequence Gaps    : {}", report.getFifoGapViolationCount());
         log.info("  Tx Rollback Leaks     : {}", report.getRollbackLeakCount());
+        log.info("  Filter Leaks          : {}", report.getFilterLeakCount());
         log.info("  Premature Timer Msgs  : {}", report.getPrematureTimerDeliveryCount());
         log.info("  Chaos Events (OK/All) : {}/{}", report.getChaosEventsSucceeded(), report.getChaosEventsTriggered());
         log.info("  Latency (P50/P95/P99) : {}/{}/{} ms (max={} ms)",

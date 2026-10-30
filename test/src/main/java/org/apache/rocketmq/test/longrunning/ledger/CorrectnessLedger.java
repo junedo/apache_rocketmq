@@ -53,7 +53,8 @@ public class CorrectnessLedger {
         NON_TX,
         PENDING,
         COMMITTED,
-        ROLLED_BACK
+        ROLLED_BACK,
+        FILTERED_OUT
     }
 
     public static class TrackedMessage {
@@ -138,12 +139,19 @@ public class CorrectnessLedger {
     private final AtomicLong totalUniqueConsumed = new AtomicLong(0);
     private final AtomicLong totalDuplicateConsumed = new AtomicLong(0);
     private final AtomicLong totalRolledBack = new AtomicLong(0);
+    private final AtomicLong totalFilteredOut = new AtomicLong(0);
 
     private final AtomicLong crcCorruptionCount = new AtomicLong(0);
     private final AtomicLong fifoOrderViolationCount = new AtomicLong(0);
     private final AtomicLong fifoGapViolationCount = new AtomicLong(0);
     private final AtomicLong rollbackLeakCount = new AtomicLong(0);
+    private final AtomicLong filterLeakCount = new AtomicLong(0);
     private final AtomicLong prematureTimerDeliveryCount = new AtomicLong(0);
+
+    private final Map<String, String> e2eCaseResults = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final AtomicLong e2eCasesTotal = new AtomicLong(0);
+    private final AtomicLong e2eCasesPassed = new AtomicLong(0);
+    private final AtomicLong e2eCasesFailed = new AtomicLong(0);
 
     private final ConcurrentLinkedQueue<Long> latencySamples = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<String> violations = new ConcurrentLinkedQueue<>();
@@ -238,12 +246,45 @@ public class CorrectnessLedger {
 
     public void removeUnsent(String msgKey) {
         TrackedMessage removed = trackedMessages.remove(msgKey);
-        if (removed != null && removed.isExpectedToDeliver() && !removed.isConsumed()) {
-            totalExpectedDelivered.decrementAndGet();
-            AtomicLong counter = sentByWorkload.get(removed.getWorkload());
-            if (counter != null) {
-                counter.decrementAndGet();
+        if (removed != null) {
+            if (removed.isExpectedToDeliver() && !removed.isConsumed()) {
+                totalExpectedDelivered.decrementAndGet();
+                AtomicLong counter = sentByWorkload.get(removed.getWorkload());
+                if (counter != null) {
+                    counter.decrementAndGet();
+                }
+            } else if (removed.getTxState() == TxState.FILTERED_OUT) {
+                totalFilteredOut.decrementAndGet();
             }
+        }
+    }
+
+    public void registerFilteredOutSent(Message msg) {
+        String msgKey = msg.getUserProperty(PROP_MSG_KEY);
+        String workload = msg.getUserProperty(PROP_WORKLOAD);
+        String shardingKey = msg.getUserProperty(PROP_SHARD_KEY);
+        long seqId = Long.parseLong(msg.getUserProperty(PROP_SEQ_ID));
+        long crc = Long.parseLong(msg.getUserProperty(PROP_CRC32));
+        long sendTs = Long.parseLong(msg.getUserProperty(PROP_SEND_TS));
+        long expectedDeliverTs = Long.parseLong(msg.getUserProperty(PROP_EXPECTED_DELIVER_TS));
+
+        TrackedMessage tracked = new TrackedMessage(
+            msgKey, workload, shardingKey, seqId, crc, sendTs, expectedDeliverTs, TxState.FILTERED_OUT);
+        TrackedMessage existing = trackedMessages.putIfAbsent(msgKey, tracked);
+        if (existing == null) {
+            totalFilteredOut.incrementAndGet();
+        }
+    }
+
+    public void recordE2ECaseResult(String caseName, boolean passed, long elapsedMs, String detail) {
+        e2eCasesTotal.incrementAndGet();
+        if (passed) {
+            e2eCasesPassed.incrementAndGet();
+            e2eCaseResults.put(caseName, String.format("PASS (%d ms)", elapsedMs));
+        } else {
+            e2eCasesFailed.incrementAndGet();
+            e2eCaseResults.put(caseName, String.format("FAIL (%d ms): %s", elapsedMs, detail));
+            recordViolation(String.format("[E2E_CASE_FAILED] %s: %s", caseName, detail));
         }
     }
 
@@ -281,6 +322,13 @@ public class CorrectnessLedger {
             rollbackLeakCount.incrementAndGet();
             recordViolation(String.format(
                 "[TX_ROLLBACK_LEAK] Rolled back message was delivered to consumer: key=%s", msgKey));
+        }
+        if (tracked != null && tracked.getTxState() == TxState.FILTERED_OUT) {
+            // 2b. Check Tag/SQL Filter Isolation (filtered-out message must never be delivered)
+            filterLeakCount.incrementAndGet();
+            recordViolation(String.format(
+                "[FILTER_LEAK] Filtered-out message was delivered to consumer: key=%s tag=%s",
+                msgKey, msgExt.getTags()));
         }
 
         // 3. Check Timer/Delay delivery accuracy
@@ -430,13 +478,20 @@ public class CorrectnessLedger {
         report.setTotalUniqueConsumed(totalUniqueConsumed.get());
         report.setTotalDuplicateConsumed(totalDuplicateConsumed.get());
         report.setTotalRolledBack(totalRolledBack.get());
+        report.setTotalFilteredOut(totalFilteredOut.get());
         report.setUnconsumedCount(unconsumed);
 
         report.setCrcCorruptionCount(crcCorruptionCount.get());
         report.setFifoOrderViolationCount(fifoOrderViolationCount.get());
         report.setFifoGapViolationCount(fifoGapViolationCount.get());
         report.setRollbackLeakCount(rollbackLeakCount.get());
+        report.setFilterLeakCount(filterLeakCount.get());
         report.setPrematureTimerDeliveryCount(prematureTimerDeliveryCount.get());
+
+        report.setE2eCasesTotal((int) e2eCasesTotal.get());
+        report.setE2eCasesPassed((int) e2eCasesPassed.get());
+        report.setE2eCasesFailed((int) e2eCasesFailed.get());
+        report.setE2eCaseResults(new LinkedHashMap<>(e2eCaseResults));
 
         report.setChaosEventsTriggered((int) chaosTriggeredCount.get());
         report.setChaosEventsSucceeded((int) chaosSucceededCount.get());
@@ -465,13 +520,15 @@ public class CorrectnessLedger {
         report.setViolations(new ArrayList<>(violations));
         report.setChaosLogs(new ArrayList<>(chaosLogs));
 
-        boolean allPassed = totalExpectedDelivered.get() > 0
+        boolean allPassed = (totalExpectedDelivered.get() > 0 || e2eCasesTotal.get() > 0)
             && unconsumed == 0
             && crcCorruptionCount.get() == 0
             && fifoOrderViolationCount.get() == 0
             && fifoGapViolationCount.get() == 0
             && rollbackLeakCount.get() == 0
+            && filterLeakCount.get() == 0
             && prematureTimerDeliveryCount.get() == 0
+            && e2eCasesFailed.get() == 0
             && chaosTriggeredCount.get() == chaosSucceededCount.get();
         report.setPassed(allPassed);
         return report;

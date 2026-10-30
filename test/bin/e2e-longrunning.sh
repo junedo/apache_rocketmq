@@ -35,6 +35,7 @@ DRAIN_TIMEOUT_SEC=30
 CHAOS_INTERVAL_SEC=10
 CHAOS_MODE="graceful"
 SEND_INTERVAL_MS=25
+ENABLE_E2E_SUITE="true"
 NAMESRV_PORT=19876
 BASE_BROKER_PORT=20911
 
@@ -78,6 +79,14 @@ while [ $# -gt 0 ]; do
       ;;
     --send-interval-ms)
       SEND_INTERVAL_MS="$2"
+      shift 2
+      ;;
+    --enable-e2e-suite)
+      ENABLE_E2E_SUITE="$2"
+      shift 2
+      ;;
+    --enable-e2e-suite)
+      ENABLE_E2E_SUITE="$2"
       shift 2
       ;;
     --namesrv-port)
@@ -365,7 +374,8 @@ run_single_profile() {
     --drainTimeoutSeconds "${DRAIN_TIMEOUT_SEC}" \
     --chaosIntervalSeconds "${CHAOS_INTERVAL_SEC}" \
     --chaosMode "${CHAOS_MODE}" \
-    --sendIntervalMs "${SEND_INTERVAL_MS}" || driver_exit=$?
+    --sendIntervalMs "${SEND_INTERVAL_MS}" \
+    --enableE2ESuite "${ENABLE_E2E_SUITE}" || driver_exit=$?
 
   stop_cluster
   return "${driver_exit}"
@@ -383,6 +393,36 @@ case "${ACTION}" in
     ;;
   status)
     status_cluster
+    ;;
+  run-suite)
+    DURATION_SEC=0
+    CHAOS_INTERVAL_SEC=0
+    ENABLE_E2E_SUITE="true"
+    base_work_dir="${WORK_DIR}"
+    if [ "${PROFILE}" = "matrix" ]; then
+      run_single_profile "default"
+      WORK_DIR="${base_work_dir}"
+      NAMESRV_PORT=$((NAMESRV_PORT + 100))
+      BASE_BROKER_PORT=$((BASE_BROKER_PORT + 200))
+      run_single_profile "rocksdb"
+    else
+      run_single_profile "${PROFILE}"
+    fi
+    ;;
+  run-suite)
+    DURATION_SEC=0
+    CHAOS_INTERVAL_SEC=0
+    ENABLE_E2E_SUITE="true"
+    base_work_dir="${WORK_DIR}"
+    if [ "${PROFILE}" = "matrix" ]; then
+      run_single_profile "default"
+      WORK_DIR="${base_work_dir}"
+      NAMESRV_PORT=$((NAMESRV_PORT + 100))
+      BASE_BROKER_PORT=$((BASE_BROKER_PORT + 200))
+      run_single_profile "rocksdb"
+    else
+      run_single_profile "${PROFILE}"
+    fi
     ;;
   run)
     base_work_dir="${WORK_DIR}"
@@ -405,7 +445,8 @@ Commands:
   stop-cluster     Stop all cluster OS processes in --work-dir
   restart-broker   Restart a specific broker process (--broker-id N --mode graceful|kill)
   status           Show running status of NameServer and Broker processes
-  run              Run end-to-end LongRunning verification (--profile default|rocksdb|matrix)
+  run              Run E2E Scenario Suite (32 cases) + LongRunning verification (--profile default|rocksdb|matrix)
+  run-suite        Run only the 32 E2E Scenario Suite cases (--profile default|rocksdb|matrix)
 
 Options:
   --profile <default|rocksdb|matrix>   Storage engine profile (default: default)

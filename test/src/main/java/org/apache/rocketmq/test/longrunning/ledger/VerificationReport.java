@@ -32,13 +32,19 @@ public class VerificationReport {
     private long totalUniqueConsumed;
     private long totalDuplicateConsumed;
     private long totalRolledBack;
+    private long totalFilteredOut;
     private long unconsumedCount;
 
     private long crcCorruptionCount;
     private long fifoOrderViolationCount;
     private long fifoGapViolationCount;
     private long rollbackLeakCount;
+    private long filterLeakCount;
     private long prematureTimerDeliveryCount;
+
+    private int e2eCasesTotal;
+    private int e2eCasesPassed;
+    private int e2eCasesFailed;
 
     private long p50LatencyMs;
     private long p95LatencyMs;
@@ -50,6 +56,7 @@ public class VerificationReport {
 
     private Map<String, Long> sentByWorkload = new LinkedHashMap<>();
     private Map<String, Long> consumedByWorkload = new LinkedHashMap<>();
+    private Map<String, String> e2eCaseResults = new LinkedHashMap<>();
     private List<String> violations = new ArrayList<>();
     private List<String> chaosLogs = new ArrayList<>();
 
@@ -117,6 +124,14 @@ public class VerificationReport {
         this.totalRolledBack = totalRolledBack;
     }
 
+    public long getTotalFilteredOut() {
+        return totalFilteredOut;
+    }
+
+    public void setTotalFilteredOut(long totalFilteredOut) {
+        this.totalFilteredOut = totalFilteredOut;
+    }
+
     public long getUnconsumedCount() {
         return unconsumedCount;
     }
@@ -155,6 +170,46 @@ public class VerificationReport {
 
     public void setRollbackLeakCount(long rollbackLeakCount) {
         this.rollbackLeakCount = rollbackLeakCount;
+    }
+
+    public long getFilterLeakCount() {
+        return filterLeakCount;
+    }
+
+    public void setFilterLeakCount(long filterLeakCount) {
+        this.filterLeakCount = filterLeakCount;
+    }
+
+    public int getE2eCasesTotal() {
+        return e2eCasesTotal;
+    }
+
+    public void setE2eCasesTotal(int e2eCasesTotal) {
+        this.e2eCasesTotal = e2eCasesTotal;
+    }
+
+    public int getE2eCasesPassed() {
+        return e2eCasesPassed;
+    }
+
+    public void setE2eCasesPassed(int e2eCasesPassed) {
+        this.e2eCasesPassed = e2eCasesPassed;
+    }
+
+    public int getE2eCasesFailed() {
+        return e2eCasesFailed;
+    }
+
+    public void setE2eCasesFailed(int e2eCasesFailed) {
+        this.e2eCasesFailed = e2eCasesFailed;
+    }
+
+    public Map<String, String> getE2eCaseResults() {
+        return e2eCaseResults;
+    }
+
+    public void setE2eCaseResults(Map<String, String> e2eCaseResults) {
+        this.e2eCaseResults = e2eCaseResults;
     }
 
     public long getPrematureTimerDeliveryCount() {
