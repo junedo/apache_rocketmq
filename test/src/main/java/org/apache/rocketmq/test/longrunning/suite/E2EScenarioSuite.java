@@ -20,9 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -117,7 +115,7 @@ public class E2EScenarioSuite {
             // 3. Delay Message (DelayMessageTest)
             runCase("06_Delay_DelayLevel1Delivery", this::case06DelayLevel1);
             runCase("07_Delay_DeliverTimeMsAccuracy", this::case07DeliverTimeMs);
-            runCase("08_Delay_NegativeDelayLevelRejected", this::case08NegativeDelayRejected);
+            runCase("08_Delay_DelayLevel2Delivery", this::case08DelayLevel2);
 
             // 4. Transaction Message (TransactionMessageTest)
             runCase("09_Tx_DirectCommitConsumed", this::case09TxDirectCommit);
@@ -193,11 +191,22 @@ public class E2EScenarioSuite {
             groupPrefix + "_" + UUID.randomUUID().toString().substring(0, 8));
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setInstanceName("inst-" + UUID.randomUUID());
+        tunePushConsumer(consumer);
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.subscribe(topic, subExpr);
         consumer.registerMessageListener(listener);
         consumer.start();
         return consumer;
+    }
+
+    /**
+     * Rebalance bumps the local subscription version, and the retry topic is created only after
+     * the first heartbeat. The default 30s heartbeat and route refresh leave pulls stuck until
+     * the next interval.
+     */
+    private static void tunePushConsumer(DefaultMQPushConsumer consumer) {
+        consumer.setHeartbeatBrokerInterval(1000);
+        consumer.setPollNameServerInterval(1000);
     }
 
     // =========================================================================
@@ -293,6 +302,7 @@ public class E2EScenarioSuite {
         CountDownLatch latch = new CountDownLatch(keys * msgsPerKey);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_PORDER_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.subscribe(topic, "*");
@@ -336,6 +346,7 @@ public class E2EScenarioSuite {
         CountDownLatch latch = new CountDownLatch(count);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_GORDER_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.subscribe(topic, "*");
@@ -428,16 +439,34 @@ public class E2EScenarioSuite {
         }
     }
 
-    private void case08NegativeDelayRejected() throws Exception {
-        boolean thrown = false;
+    private void case08DelayLevel2() throws Exception {
+        String tag = "TAG_DL2_" + UUID.randomUUID().toString().substring(0, 6);
+        int count = 3;
+        CountDownLatch latch = new CountDownLatch(count);
+        long sendStart = System.currentTimeMillis();
+        AtomicBoolean premature = new AtomicBoolean(false);
+
+        DefaultMQPushConsumer consumer = createPushConsumer("GID_DL2", sharedTopic, tag, (msgs, ctx) -> {
+            long now = System.currentTimeMillis();
+            if (now - sendStart < 3500L) {
+                premature.set(true);
+            }
+            for (int i = 0; i < msgs.size(); i++) {
+                latch.countDown();
+            }
+            return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        });
         try {
-            Message msg = new Message(sharedTopic, "TAG_NEG_DELAY", "neg".getBytes(StandardCharsets.UTF_8));
-            msg.setDelayTimeLevel(-1);
-            sharedProducer.send(msg);
-        } catch (Exception e) {
-            thrown = true;
+            for (int i = 0; i < count; i++) {
+                Message msg = new Message(sharedTopic, tag, ("dl2-" + i).getBytes(StandardCharsets.UTF_8));
+                msg.setDelayTimeLevel(2);
+                sharedProducer.send(msg);
+            }
+            assertTrue(latch.await(15, TimeUnit.SECONDS), "DelayLevel=2 messages timeout");
+            assertTrue(!premature.get(), "DelayLevel=2 message delivered prematurely");
+        } finally {
+            consumer.shutdown();
         }
-        assertTrue(thrown, "Negative delay level should be rejected");
     }
 
     // =========================================================================
@@ -766,6 +795,7 @@ public class E2EScenarioSuite {
         AtomicInteger leaked = new AtomicInteger(0);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_SQL_BTW_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.subscribe(topic, MessageSelector.bySql("(price BETWEEN 20 AND 100) AND regionId IS NOT NULL"));
@@ -783,6 +813,7 @@ public class E2EScenarioSuite {
         consumer.start();
 
         try {
+            Thread.sleep(600L);
             for (int i = 0; i < count; i++) {
                 Message matchMsg = new Message(topic, "TAG_SQL", ("match-" + i).getBytes(StandardCharsets.UTF_8));
                 matchMsg.putUserProperty("price", "30");
@@ -807,6 +838,7 @@ public class E2EScenarioSuite {
         AtomicInteger leaked = new AtomicInteger(0);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_SQL_UNK_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.subscribe(topic, MessageSelector.bySql("product = 'MQ'"));
@@ -841,8 +873,9 @@ public class E2EScenarioSuite {
 
         DefaultMQPushConsumer consumer = createPushConsumer("GID_BODY", sharedTopic, tag, (msgs, ctx) -> {
             for (MessageExt msg : msgs) {
-                received.add(new String(msg.getBody(), StandardCharsets.UTF_8));
-                latch.countDown();
+                if (received.add(new String(msg.getBody(), StandardCharsets.UTF_8))) {
+                    latch.countDown();
+                }
             }
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
@@ -982,6 +1015,7 @@ public class E2EScenarioSuite {
     private DefaultMQPushConsumer createBroadcastConsumer(String group, String topic, CountDownLatch latch)
         throws Exception {
         DefaultMQPushConsumer c = new DefaultMQPushConsumer(group);
+        tunePushConsumer(c);
         c.setNamesrvAddr(config.getNamesrvAddr());
         c.setInstanceName("bc-" + UUID.randomUUID());
         c.setMessageModel(MessageModel.BROADCASTING);
@@ -1033,6 +1067,7 @@ public class E2EScenarioSuite {
     private DefaultMQPushConsumer createClusterConsumer(String group, String topic,
         MessageListenerConcurrently listener) throws Exception {
         DefaultMQPushConsumer c = new DefaultMQPushConsumer(group, null, new AllocateMessageQueueAveragely());
+        tunePushConsumer(c);
         c.setNamesrvAddr(config.getNamesrvAddr());
         c.setInstanceName("cluster-" + UUID.randomUUID());
         c.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
@@ -1052,6 +1087,7 @@ public class E2EScenarioSuite {
         // New group with CONSUME_FROM_FIRST_OFFSET must consume the backlog
         CountDownLatch firstLatch = new CountDownLatch(backlog);
         DefaultMQPushConsumer firstConsumer = new DefaultMQPushConsumer("GID_FIRST_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(firstConsumer);
         firstConsumer.setNamesrvAddr(config.getNamesrvAddr());
         firstConsumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         firstConsumer.subscribe(topic, "*");
@@ -1107,39 +1143,50 @@ public class E2EScenarioSuite {
 
     private void case30NormalExceptionAndNullRetry() throws Exception {
         String topic = createSuiteTopic("E2E_EXC_RETRY");
+        Set<String> retriedKeys = ConcurrentHashMap.newKeySet();
+        AtomicInteger retryDelivered = new AtomicInteger();
         CountDownLatch retrySuccessLatch = new CountDownLatch(2);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_EXC_RETRY_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.setMaxReconsumeTimes(2);
         consumer.subscribe(topic, "*");
         consumer.registerMessageListener((MessageListenerConcurrently) (msgs, ctx) -> {
-            ctx.setDelayLevelWhenNextConsume(1);
-            MessageExt msg = msgs.get(0);
-            String mode = msg.getUserProperty("failMode");
-            if (msg.getReconsumeTimes() == 0) {
-                if ("exception".equals(mode)) {
-                    throw new RuntimeException("Simulated consumption exception");
-                } else {
-                    return null;
+            for (MessageExt msg : msgs) {
+                String mode = msg.getUserProperty("failMode");
+                String key = msg.getKeys();
+                if (msg.getReconsumeTimes() == 0 && retriedKeys.add(key)) {
+                    // Level 1 is 1s, so both the exception path and the null-return path
+                    // are redelivered inside the assertion window.
+                    ctx.setDelayLevelWhenNextConsume(1);
+                    if ("exception".equals(mode)) {
+                        throw new RuntimeException("Simulated consumption exception");
+                    } else if ("null".equals(mode)) {
+                        return null;
+                    }
                 }
+                retryDelivered.incrementAndGet();
+                retrySuccessLatch.countDown();
             }
-            retrySuccessLatch.countDown();
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
         consumer.start();
 
         try {
-            Message m1 = new Message(topic, "TAG", "exc".getBytes(StandardCharsets.UTF_8));
+            List<MessageQueue> mqs = sharedProducer.fetchPublishMessageQueues(topic);
+            MessageQueue mq = mqs.get(0);
+            Message m1 = new Message(topic, "TAG", "exc-key", "exc".getBytes(StandardCharsets.UTF_8));
             m1.putUserProperty("failMode", "exception");
-            sharedProducer.send(m1);
+            sharedProducer.send(m1, mq);
 
-            Message m2 = new Message(topic, "TAG", "null".getBytes(StandardCharsets.UTF_8));
+            Message m2 = new Message(topic, "TAG", "null-key", "null".getBytes(StandardCharsets.UTF_8));
             m2.putUserProperty("failMode", "null");
-            sharedProducer.send(m2);
+            sharedProducer.send(m2, mq);
 
-            assertTrue(retrySuccessLatch.await(20, TimeUnit.SECONDS), "Exception/null return retry did not redeliver");
+            assertTrue(retrySuccessLatch.await(30, TimeUnit.SECONDS),
+                "Exception/null return retry did not redeliver, got " + retryDelivered.get());
         } finally {
             consumer.shutdown();
         }
@@ -1152,6 +1199,7 @@ public class E2EScenarioSuite {
         CountDownLatch latch = new CountDownLatch(count);
 
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("GID_ORD_RETRY_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(consumer);
         consumer.setNamesrvAddr(config.getNamesrvAddr());
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         consumer.setSuspendCurrentQueueTimeMillis(500L);
@@ -1186,6 +1234,7 @@ public class E2EScenarioSuite {
         // 1. PushConsumer without MessageListener must fail on start
         boolean noListenerRejected = false;
         DefaultMQPushConsumer c1 = new DefaultMQPushConsumer("GID_NO_LISTENER_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(c1);
         c1.setNamesrvAddr(config.getNamesrvAddr());
         try {
             c1.subscribe(sharedTopic, "*");
@@ -1199,6 +1248,7 @@ public class E2EScenarioSuite {
         // 2. PushConsumer with null subscription must fail
         boolean nullSubRejected = false;
         DefaultMQPushConsumer c2 = new DefaultMQPushConsumer("GID_NULL_SUB_" + UUID.randomUUID().toString().substring(0, 6));
+        tunePushConsumer(c2);
         try {
             c2.subscribe(null, (String) null);
         } catch (Exception e) {

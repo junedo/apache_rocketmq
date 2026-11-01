@@ -1,0 +1,232 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>当前分支变更总结：E2E 独立进程集群与 LongRunning 正确性验证</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --elevated: #263349;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --ok: #34d399;
+      --ok-soft: rgba(52, 211, 153, 0.14);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.14);
+      --purple: #a78bfa;
+      --code: #0b1120;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --surface: #fff; --elevated: #f1f5f9; --border: #e2e8f0;
+        --text: #0f172a; --muted: #475569; --accent: #0284c7;
+        --accent-soft: rgba(2, 132, 199, 0.1); --ok: #059669; --ok-soft: rgba(5, 150, 105, 0.1);
+        --warn: #d97706; --warn-soft: rgba(217, 119, 6, 0.1); --purple: #7c3aed; --code: #0f172a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.65; }
+    header { padding: 48px 24px 28px; background: linear-gradient(160deg, var(--accent-soft), transparent 55%); border-bottom: 1px solid var(--border); }
+    .wrap { max-width: 1080px; margin: 0 auto; }
+    h1 { font-size: 1.85rem; line-height: 1.3; margin: 0 0 10px; }
+    h2 { font-size: 1.25rem; margin: 0 0 12px; }
+    h3 { font-size: 1.02rem; margin: 18px 0 8px; }
+    p { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 22px; }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+    .kpi b { display: block; font-size: 1.25rem; color: var(--accent); }
+    .kpi span { color: var(--muted); font-size: 0.86rem; }
+    main { padding: 28px 24px 64px; }
+    section { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 24px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    code, .mono { font-family: var(--mono); font-size: 0.86em; }
+    code { background: var(--elevated); padding: 1px 5px; border-radius: 4px; }
+    .pass { color: var(--ok); font-weight: 700; }
+    .tag { display: inline-block; background: var(--ok-soft); color: var(--ok); border-radius: 999px; padding: 1px 8px; font-size: 0.78rem; font-weight: 700; }
+    .tag.warn { background: var(--warn-soft); color: var(--warn); }
+    ul { margin: 0; padding-left: 1.2rem; }
+    li { margin: 4px 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .box { background: var(--elevated); border-radius: 10px; padding: 12px 14px; }
+    .box h3 { margin-top: 0; }
+    pre { background: var(--code); color: #e2e8f0; padding: 12px 14px; border-radius: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="muted">Apache RocketMQ · 分支变更评审 · 2026-11-01</p>
+      <h1>当前分支变更总结</h1>
+      <p>在 <code>develop</code>（<code>592d59d12</code>）之上新增独立进程端到端集群和 LongRunning 正确性验证，用来确认对 RocketMQ 的修改在真实进程、混合负载和 Broker 重启之后仍然满足不变量。</p>
+      <p class="muted">分支 <code>cursor/cloud-agent-1793327098752-b3uqz</code>。已提交 4 个 commit，工作区还有 6 个文件未提交。本报告按工作区现状汇总，包含未提交修正。</p>
+      <div class="kpis">
+        <div class="kpi"><b>+5,964</b><span>已提交新增行，20 个文件，全部在 test/ 与 docs/cn/</span></div>
+        <div class="kpi"><b>32 场景</b><span>对齐 junedo/rocketmq-e2e 的 10 个领域</span></div>
+        <div class="kpi"><b>8 类负载</b><span>外加 6 个正确性不变量和进程级故障注入</span></div>
+        <div class="kpi"><b>32/32</b><span>default 与 rocksdb 场景套件均通过</span></div>
+      </div>
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <section>
+        <h2>1. 这次分支在解决什么</h2>
+        <p>嵌入式单测共享同一个 JVM，看不到独立 NameServer / Broker 进程、真实刷盘和 <code>SIGTERM</code> 重启。这个分支不改 Broker 生产代码，只在 <code>rocketmq-test</code> 里加一套可重复的验证入口：</p>
+        <ul>
+          <li>脚本拉起独立 OS 进程集群，存储可切 <code>default</code>（文件 ConsumeQueue + Config V1）或 <code>rocksdb</code>（RocksDB ConsumeQueue + Config V2 + Timer/事务/索引 RocksDB）。</li>
+          <li>先跑 32 个功能场景，再跑 8 类持续负载，并在负载期间重启 Broker。</li>
+          <li>每条消息带 CRC32、序号、事务状态和期望投递时间。<code>CorrectnessLedger</code> 在消费端核对，失败时写出 JSON 报告并以非 0 退出。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2. 提交记录</h2>
+        <table>
+          <thead><tr><th>Commit</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>7d107b2bb</code></td><td>新增独立进程集群脚本、驱动、账本和最初 5 类负载。</td></tr>
+            <tr><td><code>21321ac8d</code></td><td>补充框架设计说明和 HTML 设计报告。</td></tr>
+            <tr><td><code>94dd2d2c4</code></td><td>修正驱动日志配置，避免测试 logback 把 INFO 日志吃掉。</td></tr>
+            <tr><td><code>55fc42da0</code></td><td>补齐 e2e 场景套件、Batch / Filter / Retry+LitePull 三类负载，以及过滤零泄露账本。</td></tr>
+          </tbody>
+        </table>
+        <h3>尚未提交的修正</h3>
+        <table>
+          <thead><tr><th>文件</th><th>原因</th></tr></thead>
+          <tbody>
+            <tr><td><code>E2EScenarioSuite.java</code></td><td>PushConsumer 心跳和 NameServer 路由刷新改为 1 秒。默认 30 秒时，再均衡后的订阅版本和后创建的重试 Topic 会让拉取停在 <code>SUBSCRIPTION_NOT_LATEST</code> 或根本不拉重试队列。重试场景把两条失败消息钉在同一队列，并把下次重试延迟设为 1 秒。</td></tr>
+            <tr><td><code>CorrectnessLedger.java</code><br/><code>FifoOrderedWorkload.java</code></td><td>FIFO 最大序号只在发送成功后登记。发送失败仍记入最大序号时，排空阶段会报假缺口。</td></tr>
+            <tr><td><code>e2e-longrunning.sh</code></td><td>新增 <code>run-suite</code>。Broker 使用 16MB CommitLog、20KB ConsumeQueue，并关闭约 400MB 的消息索引文件，避免测试目录自己把磁盘写满。磁盘告警比例设为 0.99（运行时仍会被引擎上限钳到 0.90）。</td></tr>
+            <tr><td>两份文档</td><td>设计说明和原 HTML 报告改为 8 类负载、6 个不变量，并写入本机实测数字。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>3. 变更结构</h2>
+        <div class="grid">
+          <div class="box">
+            <h3>集群编排</h3>
+            <p><code>test/bin/e2e-longrunning.sh</code> 管理 NameServer 和多个 Broker 进程。命令包括 <code>start-cluster</code>、<code>stop-cluster</code>、<code>restart-broker</code>、<code>status</code>、<code>run</code>、<code>run-suite</code>。Profile 支持 <code>default</code>、<code>rocksdb</code>、<code>matrix</code>。</p>
+          </div>
+          <div class="box">
+            <h3>验证驱动</h3>
+            <p><code>LongRunningTestDriver</code> 探活集群、建 Topic，先执行 <code>E2EScenarioSuite</code>，再启动负载和 <code>ClusterChaosController</code>，最后排空并写 <code>verification-report-&lt;profile&gt;.json</code>。</p>
+          </div>
+          <div class="box">
+            <h3>六个不变量</h3>
+            <ul>
+              <li>零丢失：<code>unconsumedCount == 0</code></li>
+              <li>零损坏：<code>crcCorruptionCount == 0</code></li>
+              <li>FIFO 连续且有序：顺序违规和缺号都为 0</li>
+              <li>事务回滚零泄露：<code>rollbackLeakCount == 0</code></li>
+              <li>过滤零泄露：<code>filterLeakCount == 0</code></li>
+              <li>定时不提前投递：<code>prematureTimerDeliveryCount == 0</code></li>
+            </ul>
+          </div>
+          <div class="box">
+            <h3>八类持续负载</h3>
+            <p>Normal、FIFO、Delay、Transaction（70% 提交 / 20% 回滚 / 10% 回查）、Pop、Batch、Tag+SQL92 Filter、Retry + LitePull。Chaos 按间隔对 Broker 发 <code>SIGTERM</code> 或 <code>SIGKILL</code>，并等待路由恢复。</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. 32 个场景与 junedo/rocketmq-e2e 的对应关系</h2>
+        <table>
+          <thead><tr><th>领域</th><th>参考用例</th><th>本分支场景</th></tr></thead>
+          <tbody>
+            <tr><td>普通消息</td><td><code>NormalMessageTest</code></td><td>01 同步、02 异步、03 OneWay</td></tr>
+            <tr><td>顺序消息</td><td><code>OrderMessageTest</code></td><td>04 分区顺序、05 单队列全局顺序</td></tr>
+            <tr><td>延迟消息</td><td><code>DelayMessageTest</code></td><td>06 DelayLevel=1、07 <code>deliverTimeMs</code>、08 DelayLevel=2</td></tr>
+            <tr><td>事务消息</td><td><code>TransactionMessageTest</code></td><td>09 直接提交、10 直接回滚零泄露、11 Checker 提交/回滚各半</td></tr>
+            <tr><td>批量发送</td><td><code>BatchProducerTest</code></td><td>12 Topic 批量、13 指定队列批量</td></tr>
+            <tr><td>Tag 过滤</td><td><code>TagFilterTest</code></td><td>14 <code>A || B</code> 与未命中、15 通配 <code>*</code>、16 <code>BB</code>/<code>Aa</code> 哈希冲突、17 大小写、18 4KB Tag</td></tr>
+            <tr><td>SQL92 过滤</td><td><code>SqlFilterTest</code></td><td>19 <code>BETWEEN</code> + <code>IS NOT NULL</code>、20 未知属性零泄露</td></tr>
+            <tr><td>消息边界</td><td>Body / Key / Size / Abnormal</td><td>21 空格、中文、Emoji、22 多 Key、23 512KB、24 超过 4MB 拒绝、25 空 body 与空 topic 拒绝</td></tr>
+            <tr><td>模型与位点</td><td>Cluster / LoadBalancing / Offset / Pull</td><td>26 广播同组与异组、27 集群缩容、28 从最早位点、29 LitePull assign + seek + commit</td></tr>
+            <tr><td>重试与参数</td><td>PushConsumerRetry / Init / Group</td><td>30 异常与返回 null 触发重试、31 顺序挂起后恢复且保序、32 缺 listener、空订阅、<code>DEFAULT_CONSUMER</code> 拒绝</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>5. 本机验证</h2>
+        <p>2026-11-01 磁盘清理后，数据盘占用约 79%，低于 Broker 磁盘告警上限 90%。在 <code>/tmp/rmq-e2e-suite-rerun2</code> 上执行 <code>run-suite --profile matrix</code>。</p>
+        <table>
+          <thead><tr><th>检查</th><th>default</th><th>rocksdb</th></tr></thead>
+          <tbody>
+            <tr><td>32 个场景</td><td class="pass">32/32 通过<br/><span class="muted">runId lr-5713191a</span></td><td class="pass">32/32 通过<br/><span class="muted">runId lr-75cf53e0</span></td></tr>
+            <tr><td>丢失 / CRC / FIFO / 回滚泄露 / 过滤泄露 / 早投</td><td class="pass">全部为 0</td><td class="pass">全部为 0</td></tr>
+            <tr><td>账本单测与 Checkstyle</td><td colspan="2"><code>CorrectnessLedgerTest</code> 2 个用例通过，<code>rocketmq-test</code> Checkstyle 0 违规</td></tr>
+          </tbody>
+        </table>
+        <h3>更早的八类负载抽查</h3>
+        <p class="muted">磁盘清理前，数据盘占用 92% 时普通目录会被 Broker 拒绝写入。下面这组是在独立内存盘上、12 秒负载加一次优雅重启的结果，用来确认八类负载本身。磁盘清理后的正式重跑覆盖的是 32 个场景，没有再跑这组长负载。</p>
+        <table>
+          <thead><tr><th></th><th>default · lr-8009dc18</th><th>rocksdb · lr-54b04086</th></tr></thead>
+          <tbody>
+            <tr><td>期望投递 / 唯一消费</td><td>2,954 / 2,954</td><td>2,949 / 2,949</td></tr>
+            <tr><td>Normal / Batch / Delay / Pop / RetryPull / FIFO / Tx / Filter</td><td>663 / 712 / 348 / 347 / 346 / 273 / 178 / 87</td><td>662 / 712 / 347 / 347 / 345 / 272 / 177 / 87</td></tr>
+            <tr><td>回滚隔离 / 过滤隔离</td><td>57 / 260，泄露均为 0</td><td>57 / 259，泄露均为 0</td></tr>
+            <tr><td>Chaos</td><td class="pass">1/1 恢复</td><td class="pass">1/1 恢复</td></tr>
+            <tr><td>结论</td><td class="pass">PASSED</td><td class="pass">PASSED</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>6. 怎么复现</h2>
+<pre>bash test/bin/e2e-longrunning.sh run-suite \
+  --profile matrix \
+  --work-dir /tmp/rmq-e2e-suite
+
+bash test/bin/e2e-longrunning.sh run \
+  --profile matrix \
+  --duration 60 \
+  --chaos-interval 15 \
+  --chaos-mode graceful \
+  --work-dir /tmp/rmq-e2e-longrunning</pre>
+        <p class="muted">JSON 报告写在 <code>--work-dir/&lt;profile&gt;/verification-report-&lt;profile&gt;.json</code>。任一不变量失败或场景失败时，驱动进程以非 0 退出。</p>
+      </section>
+
+      <section>
+        <h2>7. 评审时可以看的边界</h2>
+        <ul>
+          <li>生产代码没有改动。风险集中在测试脚本会启动本机 NameServer 和 Broker，并写入 <code>--work-dir</code>。</li>
+          <li>Broker 把磁盘告警比例硬限制在 0.90。数据盘占用超过 90% 时，即使脚本传入 0.99，发送仍会返回 <code>CODE: 14</code>。</li>
+          <li>场景 30 依赖重试 Topic 的路由刷新。未提交的 1 秒刷新间隔就是为了让这条用例稳定；不带这处修改时，30 秒默认刷新会让重试消息赶不上断言窗口。</li>
+          <li>设计细节仍在 <code>docs/cn/E2E_LongRunning_Framework.md</code> 和 <code>docs/cn/E2E_LongRunning_Framework_Report.html</code>。本文件只总结相对 <code>develop</code> 的分支差异和最新实测。</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

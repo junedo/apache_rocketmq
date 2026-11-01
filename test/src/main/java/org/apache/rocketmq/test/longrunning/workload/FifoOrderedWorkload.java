@@ -140,6 +140,7 @@ public class FifoOrderedWorkload implements Workload {
             SendResult sendResult = producer.send(msg, selector, shardKey);
             if (sendResult != null && sendResult.getSendStatus() == SendStatus.SEND_OK) {
                 seqHolder.incrementAndGet();
+                ledger.recordFifoSentSeq(shardKey, nextSeq);
             } else {
                 ledger.removeUnsent(msgKey);
             }

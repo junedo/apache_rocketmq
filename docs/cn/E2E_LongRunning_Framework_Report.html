@@ -440,13 +440,13 @@
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-label">端到端消息负载模型</div>
-          <div class="kpi-value">5 Models</div>
-          <div class="kpi-desc">Normal / FIFO / Delay / Transaction / Pop</div>
+          <div class="kpi-value">8 Models + 32 Cases</div>
+          <div class="kpi-desc">五类基础负载，加上 Batch / Filter / Retry+LitePull，以及 e2e 场景套件</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">实时正确性不变量</div>
-          <div class="kpi-value">5 Invariants</div>
-          <div class="kpi-desc">0 丢失 / 0 篡改 / 0 乱序 / 0 回滚泄露 / 0 早投</div>
+          <div class="kpi-value">6 Invariants</div>
+          <div class="kpi-desc">0 丢失 / 0 篡改 / 0 乱序 / 0 回滚泄露 / 0 过滤泄露 / 0 早投</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">存储引擎矩阵覆盖</div>
@@ -456,7 +456,7 @@
         <div class="kpi-card">
           <div class="kpi-label">实测双引擎 + Chaos 通过率</div>
           <div class="kpi-value">100% PASS</div>
-          <div class="kpi-desc">累计校验 3,731 条有效消息，0 违规项</div>
+          <div class="kpi-desc">场景套件 32/32；八类负载双引擎合计 5,903 条，0 违规项</div>
         </div>
       </div>
     </div>
@@ -469,8 +469,8 @@
         <ul>
           <li><a href="#sec-purpose">1. 设计目标与解决痛点</a></li>
           <li><a href="#sec-arch">2. 整体系统架构</a></li>
-          <li><a href="#sec-ledger">3. 五维正确性真理账本</a></li>
-          <li><a href="#sec-workloads">4. 五大负载与故障注入</a></li>
+          <li><a href="#sec-ledger">3. 六维正确性真理账本</a></li>
+          <li><a href="#sec-workloads">4. 场景套件、八类负载与故障注入</a></li>
           <li><a href="#sec-matrix">5. 双存储引擎矩阵与实测</a></li>
           <li><a href="#sec-cli">6. 执行脚本与操作指南</a></li>
           <li><a href="#sec-files">7. 代码与文件清单</a></li>
@@ -567,14 +567,14 @@
 
         <!-- Section 3 -->
         <section id="sec-ledger" class="card">
-          <h2>3. 五维正确性真理账本 (CorrectnessLedger)</h2>
+          <h2>3. 六维正确性真理账本 (CorrectnessLedger)</h2>
           <p>
             <code>CorrectnessLedger</code> 是整个 LongRunning 框架的核心裁判器。每条由框架生成的消息在发送前均注入自包含的校验属性头与确定性二进制载荷：
           </p>
 <pre><code><span class="hl-comment">// 消息自描述属性头 (User Properties)</span>
 <span class="hl-key">LR_RUN_ID</span>              = "lr-ce7decc6"                  <span class="hl-comment">// 批次唯一标识，隔离不同运行实例</span>
 <span class="hl-key">LR_MSG_KEY</span>             = "lr-ce7decc6-FIFO-fifo-key-2-18" <span class="hl-comment">// 全局唯一消息主键</span>
-<span class="hl-key">LR_WORKLOAD</span>            = "NORMAL | FIFO | DELAY | TRANSACTION | POP"
+<span class="hl-key">LR_WORKLOAD</span>            = "NORMAL | FIFO | DELAY | TRANSACTION | POP | BATCH | FILTER | RETRY_PULL"
 <span class="hl-key">LR_SHARD_KEY</span>           = "fifo-key-2"                   <span class="hl-comment">// 分区顺序键</span>
 <span class="hl-key">LR_SEQ_ID</span>              = "18"                           <span class="hl-comment">// 单调递增序列号 (0, 1, 2, ...)</span>
 <span class="hl-key">LR_CRC32</span>               = "3849104721"                   <span class="hl-comment">// 发送端计算的 Body CRC32 校验和</span>
@@ -616,7 +616,13 @@
                 <td><span class="status-pass">== 0</span></td>
               </tr>
               <tr>
-                <td><strong>5. 定时触发准确性<br/>(Timer Accuracy)</strong></td>
+                <td><strong>5. 过滤零泄露<br/>(Filter Isolation)</strong></td>
+                <td><code>filterLeakCount</code></td>
+                <td>Tag 哈希冲突（<code>BB</code>/<code>Aa</code>）、大小写（<code>BB</code>/<code>bb</code>）以及 SQL92 条件未命中的消息登记为 <code>FILTERED_OUT</code>。这些消息一旦被消费者收到，立即记为过滤泄露。</td>
+                <td><span class="status-pass">== 0</span></td>
+              </tr>
+              <tr>
+                <td><strong>6. 定时触发准确性<br/>(Timer Accuracy)</strong></td>
                 <td><code>prematureTimerDeliveryCount</code></td>
                 <td>核对 <code>DELAY</code> 消息实际消费时间 <code>now + timerToleranceMs &gt;= expectedDeliverTimestamp</code>，严禁定时消息未到期提前投递。</td>
                 <td><span class="status-pass">== 0</span></td>
@@ -627,7 +633,13 @@
 
         <!-- Section 4 -->
         <section id="sec-workloads" class="card">
-          <h2>4. 五大并发工作负载与故障注入设计</h2>
+          <h2>4. 场景套件、八类并发工作负载与故障注入</h2>
+          <p>
+            长跑开始前，<code>E2EScenarioSuite</code> 先执行对齐
+            <a href="https://github.com/junedo/rocketmq-e2e">junedo/rocketmq-e2e</a>
+            的 32 个场景，覆盖普通/顺序/延迟/事务/批量、Tag 与 SQL92 过滤、消息体与边界、广播与位点、重试和客户端参数校验。
+            本机独立进程集群上该套件结果为 <strong>32/32 通过</strong>（profile=<code>default</code>，runId=<code>lr-3fb3146c</code>）。
+          </p>
           <div class="grid-3">
             <div class="feature-box">
               <h4>NormalMessageWorkload</h4>
@@ -650,6 +662,18 @@
               <p>通过 <code>RMQPopClient</code> 轮询集群各 Broker 节点执行 <code>popMessageAsync</code> 并对每条消息调用 <code>ackMessageAsync</code>，验证 Pop 飞行状态与 RocksDB Pop 存储。</p>
             </div>
             <div class="feature-box">
+              <h4>BatchMessageWorkload</h4>
+              <p>交替做 Topic 级批量发送和指定 <code>MessageQueue</code> 批量发送，对应 e2e 的 <code>BatchProducerTest</code>。</p>
+            </div>
+            <div class="feature-box">
+              <h4>TagAndSqlFilterWorkload</h4>
+              <p>四分之一消息命中 SQL92（<code>TAGS='BB' AND price BETWEEN 20 AND 100</code>），其余覆盖哈希冲突、大小写和属性越界，并断言零泄露。</p>
+            </div>
+            <div class="feature-box">
+              <h4>RetryAndLitePullWorkload</h4>
+              <p>Push 消费对部分消息首次返回 <code>RECONSUME_LATER</code>，同时用 <code>DefaultLitePullConsumer</code> 做 poll 与 <code>commitSync</code>。</p>
+            </div>
+            <div class="feature-box">
               <h4>ClusterChaosController</h4>
               <p>按配置周期（<code>--chaos-interval</code>）轮流对独立 Broker 进程执行优雅重启（<code>SIGTERM</code>）或强制杀进程（<code>SIGKILL</code>），并校验集群路由在超时窗口内完整恢复。</p>
             </div>
@@ -660,7 +684,7 @@
         <section id="sec-matrix" class="card">
           <h2>5. 双存储引擎矩阵对比与实测数据</h2>
           <p>
-            <code>test/bin/e2e-longrunning.sh</code> 支持通过 <code>--profile matrix</code> 自动依次拉起两套完全隔离的独立进程集群（分别配置为 <code>default</code> 与 <code>rocksdb</code>），运行相同的五类混合工作负载与 Broker 进程重启故障注入：
+            <code>test/bin/e2e-longrunning.sh</code> 支持通过 <code>--profile matrix</code> 依次拉起两套独立进程集群。下表是本机 12 秒八类负载加一次 Broker 优雅重启后的排空结果（场景套件另见第 4 节，32/32）：
           </p>
           <table>
             <thead>
@@ -689,23 +713,23 @@
               </tr>
               <tr>
                 <td><strong>期望投递总消息数 (Expected Delivered)</strong></td>
-                <td><code>1,865</code> 条</td>
-                <td><code>1,866</code> 条</td>
+                <td><code>2,954</code> 条</td>
+                <td><code>2,949</code> 条</td>
               </tr>
               <tr>
                 <td><strong>唯一成功消费数 (Unique Consumed)</strong></td>
-                <td><code>1,865</code> 条</td>
-                <td><code>1,866</code> 条</td>
+                <td><code>2,954</code> 条</td>
+                <td><code>2,949</code> 条</td>
               </tr>
               <tr>
-                <td><strong>各负载分布 (Normal / Pop / Delay / FIFO / Tx)</strong></td>
-                <td><code>684 / 358 / 358 / 284 / 181</code></td>
-                <td><code>684 / 359 / 358 / 283 / 182</code></td>
+                <td><strong>各负载 (Normal / Batch / Delay / Pop / RetryPull / FIFO / Tx / Filter)</strong></td>
+                <td><code>663 / 712 / 348 / 347 / 346 / 273 / 178 / 87</code></td>
+                <td><code>662 / 712 / 347 / 347 / 345 / 272 / 177 / 87</code></td>
               </tr>
               <tr>
-                <td><strong>事务回滚拦截数 (Tx Rolled Back)</strong></td>
-                <td><code>59</code> 条 (0 泄露)</td>
-                <td><code>59</code> 条 (0 泄露)</td>
+                <td><strong>事务回滚拦截 / 过滤隔离</strong></td>
+                <td><code>57</code> 条回滚，<code>260</code> 条过滤（0 泄露）</td>
+                <td><code>57</code> 条回滚，<code>259</code> 条过滤（0 泄露）</td>
               </tr>
               <tr>
                 <td><strong>Broker 进程 Chaos 重启恢复</strong></td>
@@ -714,13 +738,13 @@
               </tr>
               <tr>
                 <td><strong>端到端延迟 (P50 / P95)</strong></td>
-                <td><code>3 ms / 1,079 ms</code></td>
-                <td><code>2 ms / 1,094 ms</code></td>
+                <td><code>2 ms / 5,743 ms</code></td>
+                <td><code>2 ms / 1,059 ms</code></td>
               </tr>
               <tr>
-                <td><strong>五维不变量违规数 (丢失/CRC/乱序/泄露/早投)</strong></td>
-                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
-                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
+                <td><strong>不变量违规 (丢失/CRC/乱序/事务泄露/过滤泄露/早投)</strong></td>
+                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
+                <td><span class="status-pass">0 / 0 / 0 / 0 / 0 / 0 (PASSED)</span></td>
               </tr>
             </tbody>
           </table>
@@ -730,7 +754,12 @@
         <section id="sec-cli" class="card">
           <h2>6. 执行脚本与操作指南</h2>
 
-          <h3>6.1 一键运行双存储引擎 Matrix 端到端长稳验证</h3>
+          <h3>6.1 只跑 32 个场景</h3>
+<pre><code>bash test/bin/e2e-longrunning.sh run-suite \
+  --profile default \
+  --work-dir /tmp/rmq-e2e-suite</code></pre>
+
+          <h3>6.2 一键运行双存储引擎 Matrix 端到端长稳验证</h3>
 <pre><code>bash test/bin/e2e-longrunning.sh run \
   --profile matrix \
   --duration 60 \
@@ -740,7 +769,7 @@
   --send-interval-ms 25 \
   --work-dir /tmp/rmq-e2e-longrunning</code></pre>
 
-          <h3>6.2 单独运行 RocksDB 存储引擎 + 混合故障注入 (SIGTERM + SIGKILL)</h3>
+          <h3>6.3 单独运行 RocksDB 存储引擎 + 混合故障注入 (SIGTERM + SIGKILL)</h3>
 <pre><code>bash test/bin/e2e-longrunning.sh run \
   --profile rocksdb \
   --duration 120 \
@@ -748,7 +777,7 @@
   --chaos-mode mixed \
   --work-dir /tmp/rmq-e2e-rocksdb</code></pre>
 
-          <h3>6.3 独立进程集群手工启停与故障演练</h3>
+          <h3>6.4 独立进程集群手工启停与故障演练</h3>
 <pre><code><span class="hl-comment"># 1. 启动独立 NameServer + 2 节点 Broker 进程</span>
 bash test/bin/e2e-longrunning.sh start-cluster --profile rocksdb --work-dir /tmp/rmq-cluster
 
@@ -803,9 +832,13 @@ bash test/bin/e2e-longrunning.sh stop-cluster --work-dir /tmp/rmq-cluster</code>
                   <code>test/.../longrunning/workload/DelayTimerWorkload.java</code><br/>
                   <code>test/.../longrunning/workload/TransactionWorkload.java</code><br/>
                   <code>test/.../longrunning/workload/PopMessageWorkload.java</code><br/>
-                  <code>test/.../longrunning/workload/ClusterChaosController.java</code>
+                  <code>test/.../longrunning/workload/BatchMessageWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/TagAndSqlFilterWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/RetryAndLitePullWorkload.java</code><br/>
+                  <code>test/.../longrunning/workload/ClusterChaosController.java</code><br/>
+                  <code>test/.../longrunning/suite/E2EScenarioSuite.java</code>
                 </td>
-                <td>五类核心消息收发负载实现以及独立 Broker 进程周期性故障注入与恢复探活控制器。</td>
+                <td>八类消息负载、32 个场景套件，以及独立 Broker 进程周期性故障注入与恢复探活。</td>
               </tr>
               <tr>
                 <td><strong>单元测试与文档</strong></td>

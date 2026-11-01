@@ -85,10 +85,6 @@ while [ $# -gt 0 ]; do
       ENABLE_E2E_SUITE="$2"
       shift 2
       ;;
-    --enable-e2e-suite)
-      ENABLE_E2E_SUITE="$2"
-      shift 2
-      ;;
     --namesrv-port)
       NAMESRV_PORT="$2"
       shift 2
@@ -201,8 +197,11 @@ listenPort=${listen_port}
 haListenPort=${ha_port}
 storePathRootDir=${store_dir}
 storePathCommitLog=${store_dir}/commitlog
-mappedFileSizeCommitLog=104857600
-mappedFileSizeConsumeQueue=6000000
+mappedFileSizeCommitLog=16777216
+mappedFileSizeConsumeQueue=20000
+messageIndexEnable=false
+maxHashSlotNum=1024
+maxIndexNum=4096
 autoCreateTopicEnable=true
 autoCreateSubscriptionGroup=true
 enablePropertyFilter=true
@@ -219,6 +218,7 @@ configManagerVersion=${config_v}
 timerRocksDBEnable=${timer_rocks}
 transRocksDBEnable=${trans_rocks}
 indexRocksDBEnable=${index_rocks}
+diskMaxUsedSpaceRatio=95
 EOF
   done
 }
@@ -251,6 +251,8 @@ start_broker() {
   nohup "${JAVA_BIN}" "${JVM_OPTS[@]}" \
     -Drocketmq.home.dir="${WORK_DIR}" \
     -Drocketmq.client.logRoot="${WORK_DIR}/logs" \
+    -Drocketmq.broker.diskSpaceWarningLevelRatio=0.99 \
+    -Drocketmq.broker.diskSpaceCleanForciblyRatio=0.98 \
     -cp "${cp}" \
     org.apache.rocketmq.broker.BrokerStartup \
     -c "${conf_file}" \
@@ -393,21 +395,6 @@ case "${ACTION}" in
     ;;
   status)
     status_cluster
-    ;;
-  run-suite)
-    DURATION_SEC=0
-    CHAOS_INTERVAL_SEC=0
-    ENABLE_E2E_SUITE="true"
-    base_work_dir="${WORK_DIR}"
-    if [ "${PROFILE}" = "matrix" ]; then
-      run_single_profile "default"
-      WORK_DIR="${base_work_dir}"
-      NAMESRV_PORT=$((NAMESRV_PORT + 100))
-      BASE_BROKER_PORT=$((BASE_BROKER_PORT + 200))
-      run_single_profile "rocksdb"
-    else
-      run_single_profile "${PROFILE}"
-    fi
     ;;
   run-suite)
     DURATION_SEC=0

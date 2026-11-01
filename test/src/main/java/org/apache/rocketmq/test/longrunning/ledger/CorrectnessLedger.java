@@ -198,11 +198,12 @@ public class CorrectnessLedger {
         if (existing == null) {
             totalExpectedDelivered.incrementAndGet();
             sentByWorkload.computeIfAbsent(workload, k -> new AtomicLong(0)).incrementAndGet();
-            if ("FIFO".equals(workload)) {
-                fifoMaxSentSeq.computeIfAbsent(shardingKey, k -> new AtomicLong(-1))
-                    .accumulateAndGet(seqId, Math::max);
-            }
         }
+    }
+
+    public void recordFifoSentSeq(String shardingKey, long seqId) {
+        fifoMaxSentSeq.computeIfAbsent(shardingKey, k -> new AtomicLong(-1))
+            .accumulateAndGet(seqId, Math::max);
     }
 
     public void registerTxPrepared(Message msg) {
@@ -345,6 +346,7 @@ public class CorrectnessLedger {
         // 4. Check FIFO ordering per shardingKey
         if ("FIFO".equals(workload) && shardingKey != null && seqStr != null) {
             long seqId = Long.parseLong(seqStr);
+            recordFifoSentSeq(shardingKey, seqId);
             fifoConsumedSeqSet.computeIfAbsent(shardingKey, k -> ConcurrentHashMap.newKeySet()).add(seqId);
             AtomicLong lastSeq = fifoMaxConsumedSeq.computeIfAbsent(shardingKey, k -> new AtomicLong(-1L));
             synchronized (lastSeq) {
