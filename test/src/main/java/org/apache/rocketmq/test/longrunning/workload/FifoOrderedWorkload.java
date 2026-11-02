@@ -129,6 +129,12 @@ public class FifoOrderedWorkload implements Workload {
                         return mq;
                     }
                 }
+                // The pinned queue is temporarily absent from the route (e.g. its broker is restarting).
+                // Re-routing the key to another queue would split one sharding key across two queues
+                // and break the per-key ordering invariant. Fail this send instead; the producer
+                // callsite discards the unsent record and retries the same sequence on the next tick.
+                throw new IllegalStateException("Pinned queue " + pinned + " for key " + key
+                    + " is absent from the current route; refuse to fail over to keep FIFO order");
             }
             int idx = (key.hashCode() & 0x7fffffff) % mqs.size();
             MessageQueue chosen = mqs.get(idx);
